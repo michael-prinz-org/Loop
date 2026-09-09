@@ -248,6 +248,10 @@ final class WatchDataManager: NSObject {
             let context = WatchContext(glucose: glucose, glucoseUnit: self.deviceManager.preferredGlucoseUnit)
             context.reservoir = reservoir?.unitVolume
             context.loopLastRunDate = manager.lastLoopCompleted
+            if let rawState = self.deviceManager.rawPumpManager?["state"] as? [String: Any] {
+                context.podWakeUpCount = rawState["podWakeUpCount"] as? Int
+                context.lastPodWakeUpDate = rawState["lastPodWakeUpDate"] as? Date
+            }
             context.cob = carbsOnBoard?.quantity.doubleValue(for: HKUnit.gram())
 
             if let glucoseDisplay = self.deviceManager.glucoseDisplay(for: glucose) {

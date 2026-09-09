@@ -869,6 +869,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 self.tableView(tableView, updateSubtitleFor: cell, at: indexPath)
             }
         }
+
         tableView.endUpdates()
     }
 

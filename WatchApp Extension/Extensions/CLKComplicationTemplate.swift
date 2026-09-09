@@ -39,6 +39,8 @@ extension CLKComplicationTemplate {
             activeCarbohydrates: context.activeCarbohydrates,
             glucoseDisplayTier: context.glucoseDisplayTier,
             eventualGlucoseDisplayTier: context.eventualGlucoseDisplayTier,
+            podWakeUpCount: context.podWakeUpCount,
+            lastPodWakeUpDate: context.lastPodWakeUpDate,
             chartGenerator: makeChart)
     }
 
@@ -57,6 +59,8 @@ extension CLKComplicationTemplate {
         activeCarbohydrates: HKQuantity? = nil,
         glucoseDisplayTier: GlucoseDisplayTier? = nil,
         eventualGlucoseDisplayTier: GlucoseDisplayTier? = nil,
+        podWakeUpCount: Int? = nil,
+        lastPodWakeUpDate: Date? = nil,
         chartGenerator makeChart: () -> UIImage?
     ) -> CLKComplicationTemplate? {
 
@@ -201,9 +205,10 @@ extension CLKComplicationTemplate {
                                                           unit: unit,
                                                           formatter: formatter,
                                                           activeInsulin: activeInsulin,
-                                                          activeCarbohydrates: activeCarbohydrates,
                                                           freshnessColor: tintColor,
-                                                          fallbackTimeText: timeText),
+                                                          fallbackTimeText: timeText,
+                                                          podWakeUpCount: podWakeUpCount,
+                                                          lastPodWakeUpDate: lastPodWakeUpDate),
                     imageProvider: CLKFullColorImageProvider(fullColorImage: makeChart() ?? UIImage())
                 )
             } else {
@@ -231,12 +236,6 @@ extension CLKComplicationTemplate {
         return formatter
     }()
 
-    private static var complicationCarbFormatter: QuantityFormatter = {
-        let formatter = QuantityFormatter(for: .gram())
-        formatter.numberFormatter.maximumFractionDigits = 0
-        return formatter
-    }()
-
     /// Per-segment tint colors survive on `.graphicRectangular` because `ComplicationController` deliberately
     /// does not set a template-wide tint for that family.
     private static func rectangularTextProvider(
@@ -249,9 +248,10 @@ extension CLKComplicationTemplate {
         unit: HKUnit,
         formatter: NumberFormatter,
         activeInsulin: HKQuantity?,
-        activeCarbohydrates: HKQuantity?,
         freshnessColor: UIColor,
-        fallbackTimeText: CLKTextProvider
+        fallbackTimeText: CLKTextProvider,
+        podWakeUpCount: Int?,
+        lastPodWakeUpDate: Date?
     ) -> CLKTextProvider {
         let glucoseTint = glucoseDisplayTier?.complicationColor ?? freshnessColor
 
@@ -278,13 +278,19 @@ extension CLKComplicationTemplate {
             providers.append(insulinText)
         }
 
-        if let activeCarbohydrates, let carbString = compactString(from: activeCarbohydrates, formatter: complicationCarbFormatter) {
-            let carbText = CLKSimpleTextProvider(text: carbString)
-            carbText.tintColor = .white
-            providers.append(carbText)
+        if let podWakeUpCount {
+            let wakeUpText: CLKSimpleTextProvider
+            if let lastPodWakeUpDate {
+                let timeString = DateFormatter.localizedString(from: lastPodWakeUpDate, dateStyle: .none, timeStyle: .short)
+                wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x · \(timeString)")
+            } else {
+                wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x")
+            }
+            wakeUpText.tintColor = .white
+            providers.append(wakeUpText)
         }
 
-        // Three spaces so the glucose / eventual / IOB / COB segments don't run together on the complication.
+        // Three spaces keep the rectangular complication segments visually separate.
         return CLKTextProvider(byJoining: providers, separator: "    ")
     }
 
@@ -297,6 +303,7 @@ extension CLKComplicationTemplate {
         let unitString = unit ?? formatter.localizedUnitStringWithPlurality(forQuantity: quantity, avoidLineBreaking: false)
         return value + unitString
     }
+
 }
 
 extension GlucoseDisplayTier {

@@ -14,6 +14,7 @@ import LoopCore
 import LoopTestingKit
 import UserNotifications
 import Combine
+import os.log
 
 final class DeviceDataManager {
 
@@ -1117,6 +1118,19 @@ extension DeviceDataManager: DeviceManagerDelegate {
 
     func deviceManager(_ manager: DeviceManager, logEventForDeviceIdentifier deviceIdentifier: String?, type: DeviceLogEntryType, message: String, completion: ((Error?) -> Void)?) {
         deviceLog.log(managerIdentifier: manager.pluginIdentifier, deviceIdentifier: deviceIdentifier, type: type, message: message, completion: completion)
+        captureDeviceEventInAppLog(managerIdentifier: manager.pluginIdentifier, type: type, message: message)
+    }
+
+    /// Mirrors device connection and error events into the in-app log view. Send/receive entries are
+    /// dropped: they carry the raw message hex and would evict everything else from the ring buffer.
+    private func captureDeviceEventInAppLog(managerIdentifier: String, type: DeviceLogEntryType, message: String) {
+        guard type == .connection || type == .error, InAppLogStore.shared.isCapturing else {
+            return
+        }
+
+        InAppLogStore.shared.record(type: type == .error ? .error : .default,
+                                    category: managerIdentifier,
+                                    message: message)
     }
     
     var allowDebugFeatures: Bool {
