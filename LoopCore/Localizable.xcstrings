@@ -172,6 +172,12 @@
             "value" : "Aktive Kohlenhydrate (COB)"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glucides actifs (COB)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -269,6 +275,12 @@
             "value" : "Aktives Insulin (IOB)"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Insuline active (IOB)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -302,6 +314,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "la"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %1$@"
           }
         }
       }
@@ -439,10 +457,22 @@
             "value" : "COB"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glucides"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "COB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "活性碳水化合物 （COB）"
           }
         }
       }
@@ -528,6 +558,12 @@
             "value" : "Aktueller Blutzucker (Wert und Pfeil)"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glycémie actuelle (valeur et flèche)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
@@ -562,6 +598,12 @@
             "state" : "translated",
             "value" : "Delta"
           }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delta (变化值)"
+          }
         }
       }
     },
@@ -574,10 +616,22 @@
             "value" : "Blutzuckeränderung (Delta)"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delta Glucose (Delta)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Delta glicemie (Delta)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "血糖变化量（Delta）"
           }
         }
       }
@@ -663,10 +717,22 @@
             "value" : "Prognostizierter Glukosewert (Voraussichtlicher Blutzuckerwert)"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glycémie prévue (glycémie finale)"
+          }
+        },
         "ro" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Glicemie prognozată (glicemie eventuală)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预测血糖（最终稳态血糖）"
           }
         }
       }
@@ -716,6 +782,12 @@
             "value" : "IOB"
           }
         },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Insuline"
+          }
+        },
         "nl" : {
           "stringUnit" : {
             "state" : "translated",
@@ -726,6 +798,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "IOB"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "活性胰岛素 （IOB）"
           }
         }
       }
@@ -815,6 +893,12 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rată bazală relativă (bazală)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相对基础率（基础率）"
           }
         }
       }
