@@ -599,8 +599,9 @@ final class DeviceDataManager {
     /// 1. A tolerant compute pass determines whether an automatic dose is required (closed loop only).
     /// 2. If a dose is required and the interval has elapsed, pump data is synced and the dose is enacted.
     ///    This is never blocked by background suppression.
-    /// 3. Otherwise pump data is refreshed for freshness only when the interval has elapsed and background
-    ///    communication is not suppressed.
+    /// 3. Otherwise pump data is refreshed for freshness only in closed loop, when the interval has elapsed
+    ///    and background communication is not suppressed. Open loop never enacts, so there is nothing to
+    ///    keep fresh for and the pod is left alone.
     /// 4. When neither applies the pod is left alone ("no dose, no sync").
     ///
     /// - Parameter forcePumpSync: When `true` (e.g. the user just enabled closed loop) the interval and
@@ -659,9 +660,9 @@ final class DeviceDataManager {
             return
         }
 
-        // Routine freshness: refresh only when the interval allows and background comms are not suppressed.
+        // Routine freshness: only useful to prime a future automatic dose, so skip it entirely in open loop.
         // `ensureCurrentPumpData` is a no-op when pump data is already fresh.
-        if intervalElapsed, !backgroundSuppressed, let pumpManager = pumpManager, pumpManager.isOnboarded {
+        if automaticDosingStatus.automaticDosingEnabled, intervalElapsed, !backgroundSuppressed, let pumpManager = pumpManager, pumpManager.isOnboarded {
             self.log.default("Refreshing pump data for freshness; pump data is %{public}.0f s old", Date().timeIntervalSince(doseStore.lastAddedPumpData))
             pumpManager.ensureCurrentPumpData { lastSync in
                 self.recordPodCommunicationAndLoop(lastSync: lastSync, enactingAutomaticDose: false)

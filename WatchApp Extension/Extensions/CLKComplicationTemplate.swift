@@ -282,7 +282,7 @@ extension CLKComplicationTemplate {
             let wakeUpText: CLKSimpleTextProvider
             if let lastPodWakeUpDate {
                 let timeString = DateFormatter.localizedString(from: lastPodWakeUpDate, dateStyle: .none, timeStyle: .short)
-                wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x · \(timeString)")
+                wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x  \(timeString)")
             } else {
                 wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x")
             }
@@ -290,8 +290,8 @@ extension CLKComplicationTemplate {
             providers.append(wakeUpText)
         }
 
-        // Three spaces keep the rectangular complication segments visually separate.
-        return CLKTextProvider(byJoining: providers, separator: "    ")
+        // Two spaces keep the rectangular complication segments visually separate.
+        return CLKTextProvider(byJoining: providers, separator: "  ")
     }
 
     /// Value and unit without the usual separating space, to save room on the complication. Pass `unit` to

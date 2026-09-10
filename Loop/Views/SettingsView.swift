@@ -203,7 +203,7 @@ extension SettingsView {
         describedToggle(
             isOn: $viewModel.customLoopIntervalEnabled,
             title: Text("Custom pod communication interval", comment: "The title text for the custom loop interval switch cell"),
-            description: NSLocalizedString("When on, automatic pod communication is limited to at most once per the communication interval below. Off keeps the standard loop cadence.", comment: "The description text for the custom loop interval switch cell")
+            description: NSLocalizedString("Rate limit: caps how often Loop is allowed to contact the pod (dose syncs and background freshness syncs alike) to at most once per the interval below, in both foreground and background. It does not decide whether a sync happens, only how often — see Disable Pod Communication below to also skip syncs that aren't needed for a dose. Off keeps the standard loop cadence.", comment: "The description text for the custom loop interval switch cell")
         )
 
         VStack(alignment: .leading, spacing: 4) {
@@ -233,7 +233,7 @@ extension SettingsView {
         describedToggle(
             isOn: $viewModel.suppressPodCommunicationInBackground,
             title: Text("Disable Pod Communication", comment: "The title text for the disable pod communication switch cell"),
-            description: NSLocalizedString("When on, routine pod communication is skipped while the app is in the background. A required automatic dose is still delivered.", comment: "The description text for the disable pod communication switch cell")
+            description: NSLocalizedString("Need filter: while the app is in the background, skips the routine sync Loop otherwise makes just to keep pod data fresh, so the pod is only contacted when a dose actually needs to be delivered. A required dose is never skipped. The app in the foreground is unaffected — freshness syncs continue there so status shown on screen stays current. With Closed Loop off there are no freshness syncs to skip, so this setting has no effect.", comment: "The description text for the disable pod communication switch cell")
         )
     }
 
@@ -818,7 +818,7 @@ struct LogView: View {
     @State private var minimumLevel: InAppLogLevel = .debug
     @State private var selectedCategory: String?
 
-    private static let countOptions = [10, 25, 50, 100, 250, 500]
+    private static let countOptions = [10, 25, 50, 100, 250, 500, 1000, 2000, 5000, 10000]
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()

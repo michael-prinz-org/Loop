@@ -175,7 +175,7 @@ final class InAppLogStore: ObservableObject {
     static let shared = InAppLogStore()
 
     /// The largest number of entries retained, and the most the log view can display.
-    static let maximumEntryCount = 500
+    static let maximumEntryCount = 10000
 
     /// UserDefaults key backing `isCapturing`.
     private static let capturingDefaultsKey = "com.loopkit.Loop.inAppLogCaptureEnabled"
