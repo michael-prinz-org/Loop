@@ -347,7 +347,7 @@ class GlucoseChartScene: SKScene {
     private func chartColor(for tier: GlucoseDisplayTier) -> UIColor {
         switch tier {
         case .inRange:
-            return .glucose.withAlphaComponent(0.9)
+            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 0.82)
         case .outOfRange:
             return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 0.72)
         case .urgent:
