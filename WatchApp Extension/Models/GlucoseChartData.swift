@@ -9,6 +9,7 @@
 import Foundation
 import HealthKit
 import LoopKit
+import LoopCore
 
 
 struct GlucoseChartData {

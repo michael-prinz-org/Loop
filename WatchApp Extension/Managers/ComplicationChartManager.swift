@@ -107,7 +107,7 @@ final class ComplicationChartManager {
         let x = scaler.xCoordinate(for: scaler.dates.end) - size.width - textInsets.right
         let y = scaler.yCoordinate(for: (scaler.glucoseMin + scaler.glucoseMax) / 2) - size.height / 2
         let rect = CGRect(origin: CGPoint(x: x, y: y), size: size).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
-        attributedText.draw(with: rect, options: .usesLineFragmentOrigin, context: nil)
+        attributedText.draw(with: rect, options: NSStringDrawingOptions.usesLineFragmentOrigin, context: nil)
     }
 
     private func drawGlucoseLabelText(_ text: String, position: GlucoseLabelPosition, scaler: GlucoseChartScaler) {
@@ -123,7 +123,7 @@ final class ComplicationChartManager {
             }
         }()
         let rect = CGRect(origin: CGPoint(x: x, y: y), size: size).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
-        attributedText.draw(with: rect, options: .usesLineFragmentOrigin, context: nil)
+        attributedText.draw(with: rect, options: NSStringDrawingOptions.usesLineFragmentOrigin, context: nil)
     }
 
     private func drawTargetRange(in context: CGContext, using scaler: GlucoseChartScaler) {

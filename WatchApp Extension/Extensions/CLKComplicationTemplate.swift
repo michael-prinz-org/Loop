@@ -272,14 +272,14 @@ extension CLKComplicationTemplate {
         }
 
         if let activeInsulin, let insulinString = compactString(from: activeInsulin, formatter: complicationInsulinFormatter, unit: "AI") {
-            let insulinText = CLKSimpleTextProvider(text: insulinString)
-            insulinText.tintColor = .systemCyan
+            let insulinText = CLKSimpleTextProvider(text: insulinString, shortText: insulinString, accessibilityLabel: insulinString)
+            insulinText.tintColor = .insulin
             providers.append(insulinText)
         }
 
         if let podWakeUpCount {
-            let wakeUpCountText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x")
-            wakeUpCountText.tintColor = .systemPurple
+            let wakeUpCountText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x", shortText: "\(podWakeUpCount)x", accessibilityLabel: "\(podWakeUpCount)x")
+            wakeUpCountText.tintColor = .overrideColor
             providers.append(wakeUpCountText)
 
             if let lastPodWakeUpDate {
