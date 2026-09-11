@@ -55,6 +55,7 @@ public protocol SettingsViewModelDelegate: AnyObject {
     func customLoopIntervalEnabledChanged(_: Bool)
     func customLoopIntervalChanged(_: TimeInterval)
     func suppressPodCommunicationInBackgroundChanged(_: Bool)
+    func glucoseDisplayRangeChanged(_: GlucoseDisplayRange)
     func didTapIssueReport()
     var closedLoopDescriptiveText: String? { get }
 }
@@ -131,6 +132,13 @@ public class SettingsViewModel: ObservableObject {
         customLoopIntervalEnabled && TimeInterval(minutes: customLoopIntervalMinutes) > LoopSettings.customLoopIntervalWarningThreshold
     }
 
+    /// Glucose thresholds in mg/dL, ordered urgent low < low < high < urgent high.
+    @Published var glucoseDisplayRange: GlucoseDisplayRange {
+        didSet {
+            delegate?.glucoseDisplayRangeChanged(glucoseDisplayRange)
+        }
+    }
+
     var showDeleteTestData: Bool {
         availableSupports.contains(where: { $0.showsDeleteTestDataUI })
     }
@@ -152,6 +160,7 @@ public class SettingsViewModel: ObservableObject {
                 initialCustomLoopIntervalEnabled: Bool,
                 initialCustomLoopIntervalMinutes: Double,
                 initialSuppressPodCommunicationInBackground: Bool,
+                initialGlucoseDisplayRange: GlucoseDisplayRange,
                 availableSupports: [SupportUI],
                 isOnboardingComplete: Bool,
                 therapySettingsViewModelDelegate: TherapySettingsViewModelDelegate?,
@@ -172,6 +181,7 @@ public class SettingsViewModel: ObservableObject {
         self.customLoopIntervalEnabled = initialCustomLoopIntervalEnabled
         self.customLoopIntervalMinutes = initialCustomLoopIntervalMinutes
         self.suppressPodCommunicationInBackground = initialSuppressPodCommunicationInBackground
+        self.glucoseDisplayRange = initialGlucoseDisplayRange
         self.availableSupports = availableSupports
         self.isOnboardingComplete = isOnboardingComplete
         self.therapySettingsViewModelDelegate = therapySettingsViewModelDelegate
@@ -223,6 +233,7 @@ extension SettingsViewModel {
                                  initialCustomLoopIntervalEnabled: false,
                                  initialCustomLoopIntervalMinutes: LoopSettings.defaultCustomLoopInterval.minutes,
                                  initialSuppressPodCommunicationInBackground: false,
+                                 initialGlucoseDisplayRange: GlucoseDisplayRange(),
                                  availableSupports: [],
                                  isOnboardingComplete: false,
                                  therapySettingsViewModelDelegate: nil,

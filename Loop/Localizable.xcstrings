@@ -39944,6 +39944,72 @@
         }
       }
     },
+    "Glucose Range" : {
+      "comment" : "Title text for the glucose range editor",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Glukosebereich"
+          }
+        }
+      }
+    },
+    "General glucose limits" : {
+      "comment" : "Descriptive text for the glucose display range editor",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allgemeine Blutzuckergrenzen"
+          }
+        }
+      }
+    },
+    "Low" : {
+      "comment" : "Glucose display range threshold label",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Niedrig"
+          }
+        }
+      }
+    },
+    "High" : {
+      "comment" : "Glucose display range threshold label",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hoch"
+          }
+        }
+      }
+    },
+    "Urgent High" : {
+      "comment" : "Glucose display range threshold label",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dringend hoch"
+          }
+        }
+      }
+    },
+    "These thresholds define the general glucose limits used by Loop to classify glucose values." : {
+      "comment" : "Descriptive text for general glucose range",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diese Grenzwerte legen die allgemeinen Blutzuckergrenzen fest, anhand derer Loop Glukosewerte einstuft."
+          }
+        }
+      }
+    },
     "Urgent Low" : {
       "localizations" : {
         "da" : {

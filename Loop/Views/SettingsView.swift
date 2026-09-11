@@ -333,6 +333,13 @@ extension SettingsView {
                             descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
             }
 
+            NavigationLink(destination: glucoseDisplayRangeView) {
+                VStack(alignment: .leading) {
+                    Text(NSLocalizedString("Glucose Range", comment: "Title text for the glucose range editor"))
+                    DescriptiveText(label: NSLocalizedString("General glucose limits", comment: "Descriptive text for the glucose display range editor"))
+                }
+            }
+
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
                 item.view
             }
@@ -349,6 +356,11 @@ extension SettingsView {
                 PluginMenuItem(section: item.section, view: item.view, pluginIdentifier: plugin.pluginIdentifier, offset: index)
             }
         }
+    }
+
+    private var glucoseDisplayRangeView: some View {
+        GlucoseDisplayRangeEditorView(range: $viewModel.glucoseDisplayRange)
+            .environmentObject(displayGlucosePreference)
     }
 
     private var deviceSettingsSection: some View {
@@ -677,6 +689,55 @@ fileprivate struct LargeButton<Content: View, SecondaryContent: View>: View {
             }
             .padding(EdgeInsets(top: topBottomPadding, leading: 0, bottom: topBottomPadding, trailing: 0))
         }
+    }
+}
+
+struct GlucoseDisplayRangeEditorView: View {
+    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
+
+    @Binding var range: GlucoseDisplayRange
+
+    var body: some View {
+        List {
+            Section(footer: DescriptiveText(label: NSLocalizedString("These thresholds define the general glucose limits used by Loop to classify glucose values.", comment: "Descriptive text for general glucose range"))) {
+                row("Urgent Low", value: $range.urgentLow)
+                row("Low", value: $range.low)
+                row("High", value: $range.high)
+                row("Urgent High", value: $range.urgentHigh)
+            }
+        }
+        .insetGroupedListStyle()
+        .navigationBarTitle(Text(NSLocalizedString("Glucose Range", comment: "Title text for the glucose range editor")))
+    }
+
+    private var step: Double {
+        displayGlucosePreference.unit == .millimolesPerLiter
+            ? HKQuantity(unit: .millimolesPerLiter, doubleValue: 0.1).doubleValue(for: .milligramsPerDeciliter)
+            : 1
+    }
+
+    private func row(_ label: String, value: Binding<Double>) -> some View {
+        Stepper(value: stepperBinding(for: value), step: step) {
+            HStack {
+                Text(NSLocalizedString(label, comment: "Glucose display range threshold label"))
+                Spacer()
+                Text(displayGlucosePreference.format(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: value.wrappedValue)))
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func stepperBinding(for value: Binding<Double>) -> Binding<Double> {
+        Binding(
+            get: { value.wrappedValue },
+            set: { newValue in
+                value.wrappedValue = newValue
+                range = GlucoseDisplayRange(urgentLow: range.urgentLow,
+                                            low: range.low,
+                                            high: range.high,
+                                            urgentHigh: range.urgentHigh)
+            }
+        )
     }
 }
 

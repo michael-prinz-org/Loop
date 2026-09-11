@@ -2514,10 +2514,6 @@ extension LoopDataManager {
                             maximumBasalRatePerHour: settings.maximumBasalRatePerHour,
                             maximumBolus: settings.maximumBolus,
                             suspendThreshold: settings.suspendThreshold,
-                            glucoseUrgentLow: settings.glucoseUrgentLow,
-                            glucoseLow: settings.glucoseLow,
-                            glucoseHigh: settings.glucoseHigh,
-                            glucoseUrgentHigh: settings.glucoseUrgentHigh,
                             insulinSensitivitySchedule: settings.insulinSensitivitySchedule,
                             carbRatioSchedule: settings.carbRatioSchedule,
                             basalRateSchedule: settings.basalRateSchedule,
@@ -2534,10 +2530,6 @@ extension LoopDataManager {
                 settings.preMealTargetRange = newValue.correctionRangeOverrides?.preMeal
                 settings.legacyWorkoutTargetRange = newValue.correctionRangeOverrides?.workout
                 settings.suspendThreshold = newValue.suspendThreshold
-                settings.glucoseUrgentLow = newValue.glucoseUrgentLow
-                settings.glucoseLow = newValue.glucoseLow
-                settings.glucoseHigh = newValue.glucoseHigh
-                settings.glucoseUrgentHigh = newValue.glucoseUrgentHigh
                 settings.maximumBolus = newValue.maximumBolus
                 settings.maximumBasalRatePerHour = newValue.maximumBasalRatePerHour
                 settings.overridePresets = newValue.overridePresets ?? []
