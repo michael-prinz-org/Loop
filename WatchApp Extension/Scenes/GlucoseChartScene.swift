@@ -111,7 +111,7 @@ class GlucoseChartScene: SKScene {
     private var maxBGLabel: SKLabelNode!
     private var minBGLabel: SKLabelNode!
     private var nodes: [Int: SKSpriteNode] = [:]
-    private var predictedPathNode: SKShapeNode?
+    private var predictedPathNodes: [SKShapeNode] = []
 
     private var needsUpdate = true
     private var shouldAnimatePredictionPath = false
@@ -300,33 +300,40 @@ class GlucoseChartScene: SKScene {
             let size = CGSize(width: 2, height: 2)
             let origin = CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2)
             let (sprite, created) = getSprite(forHash: $0.chartHashValue)
-            sprite.color = .glucose
+            sprite.color = chartColor(for: data.glucoseSettings.glucoseDisplayTier(for: $0.quantity))
             sprite.zPosition = NodePlane.values.zPosition
             sprite.move(to: CGRect(origin: origin, size: size).alignedToScreenScale(WKInterfaceDevice.current().screenScale), animated: !created)
             inactiveNodes.removeValue(forKey: $0.chartHashValue)
         }
 
-        predictedPathNode?.removeFromParent()
-        if let predictedGlucose = data.predictedGlucose, predictedGlucose.count > 2 {
-            let predictedPath = CGMutablePath()
-            predictedPath.addLines(between: predictedGlucose.map {
-                scaler.point($0.startDate, $0.quantity.doubleValue(for: unit))
-            })
+        predictedPathNodes.forEach { $0.removeFromParent() }
+        predictedPathNodes.removeAll()
+        if let predictedGlucose = data.predictedGlucose?.filter({ scaler.dates.contains($0.startDate) }), predictedGlucose.count > 1 {
+            for index in 1..<predictedGlucose.count {
+                let previous = predictedGlucose[index - 1]
+                let current = predictedGlucose[index]
+                let predictedPath = CGMutablePath()
+                predictedPath.move(to: scaler.point(previous.startDate, previous.quantity.doubleValue(for: unit)))
+                predictedPath.addLine(to: scaler.point(current.startDate, current.quantity.doubleValue(for: unit)))
 
-            predictedPathNode = SKShapeNode(path: predictedPath.copy(dashingWithPhase: 11, lengths: [5, 3]))
-            predictedPathNode?.zPosition = NodePlane.values.zPosition
-            addChild(predictedPathNode!)
+                let predictedPathNode = SKShapeNode(path: predictedPath.copy(dashingWithPhase: 0, lengths: [5, 3]))
+                predictedPathNode.strokeColor = chartColor(for: data.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate))
+                    .withAlphaComponent(0.82)
+                predictedPathNode.lineWidth = 2
+                predictedPathNode.zPosition = NodePlane.values.zPosition
+                addChild(predictedPathNode)
+                predictedPathNodes.append(predictedPathNode)
+            }
 
             if shouldAnimatePredictionPath {
                 shouldAnimatePredictionPath = false
-                // SKShapeNode paths cannot be easily animated. Make it vanish, then fade in at the new location.
-                predictedPathNode!.alpha = 0
-                predictedPathNode!.run(.sequence([
+                predictedPathNodes.forEach { node in
+                    node.alpha = 0
+                    node.run(.sequence([
                         .wait(forDuration: .moveAnimationDuration),
                         .fadeIn(withDuration: .fadeAnimationDuration)
-                    ]),
-                    withKey: "move"
-                )
+                    ]), withKey: "move")
+                }
             }
         }
 
@@ -334,6 +341,17 @@ class GlucoseChartScene: SKScene {
         inactiveNodes.forEach { hash, node in
             node.removeFromParent()
             nodes.removeValue(forKey: hash)
+        }
+    }
+
+    private func chartColor(for tier: GlucoseDisplayTier) -> UIColor {
+        switch tier {
+        case .inRange:
+            return .glucose.withAlphaComponent(0.9)
+        case .outOfRange:
+            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 0.72)
+        case .urgent:
+            return UIColor(red: 1, green: 59 / 255, blue: 48 / 255, alpha: 0.78)
         }
     }
 

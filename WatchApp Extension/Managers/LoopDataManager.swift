@@ -207,6 +207,7 @@ extension LoopDataManager {
             }
             let chartData = GlucoseChartData(
                 unit: activeContext.displayGlucoseUnit,
+                glucoseSettings: self.settings,
                 eventualGlucose: activeContext.eventualGlucose,
                 eventualGlucoseDisplayTier: activeContext.eventualGlucoseDisplayTier,
                 correctionRange: self.settings.glucoseTargetRangeSchedule,
