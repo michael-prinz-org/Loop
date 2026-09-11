@@ -266,7 +266,7 @@ extension CLKComplicationTemplate {
         providers.append(glucoseText)
 
         if let trend {
-            let trendText = CLKSimpleTextProvider(text: trend.arrows, accessibilityLabel: trend.localizedDescription)
+            let trendText = CLKSimpleTextProvider(text: trend.arrows, shortText: trend.arrows, accessibilityLabel: trend.localizedDescription)
             trendText.tintColor = trend.complicationColor
             providers.append(trendText)
         }
