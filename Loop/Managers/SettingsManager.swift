@@ -116,10 +116,10 @@ class SettingsManager {
                 settings.customLoopIntervalEnabled = defaults.customLoopIntervalEnabled
                 settings.customLoopInterval = defaults.customLoopInterval
                 settings.suppressPodCommunicationInBackground = defaults.suppressPodCommunicationInBackground
-                settings.glucoseDisplayUrgentLow = defaults.glucoseDisplayUrgentLow
-                settings.glucoseDisplayLow = defaults.glucoseDisplayLow
-                settings.glucoseDisplayHigh = defaults.glucoseDisplayHigh
-                settings.glucoseDisplayUrgentHigh = defaults.glucoseDisplayUrgentHigh
+                settings.glucoseUrgentLow = defaults.glucoseUrgentLow
+                settings.glucoseLow = defaults.glucoseLow
+                settings.glucoseHigh = defaults.glucoseHigh
+                settings.glucoseUrgentHigh = defaults.glucoseUrgentHigh
             }
 
             return settings
@@ -170,10 +170,10 @@ class SettingsManager {
             defaults.customLoopIntervalEnabled = newLoopSettings.customLoopIntervalEnabled
             defaults.customLoopInterval = newLoopSettings.customLoopInterval
             defaults.suppressPodCommunicationInBackground = newLoopSettings.suppressPodCommunicationInBackground
-            defaults.glucoseDisplayUrgentLow = newLoopSettings.glucoseDisplayUrgentLow
-            defaults.glucoseDisplayLow = newLoopSettings.glucoseDisplayLow
-            defaults.glucoseDisplayHigh = newLoopSettings.glucoseDisplayHigh
-            defaults.glucoseDisplayUrgentHigh = newLoopSettings.glucoseDisplayUrgentHigh
+            defaults.glucoseUrgentLow = newLoopSettings.glucoseUrgentLow
+            defaults.glucoseLow = newLoopSettings.glucoseLow
+            defaults.glucoseHigh = newLoopSettings.glucoseHigh
+            defaults.glucoseUrgentHigh = newLoopSettings.glucoseUrgentHigh
         }
 
         let mergedSettings = mergeSettings(newLoopSettings: newLoopSettings, notificationSettings: notificationSettings, deviceToken: deviceTokenStr)

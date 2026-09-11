@@ -27,10 +27,10 @@ extension UserDefaults {
         case customLoopIntervalEnabled = "com.loopkit.Loop.customLoopIntervalEnabled"
         case customLoopInterval = "com.loopkit.Loop.customLoopInterval"
         case suppressPodCommunicationInBackground = "com.loopkit.Loop.suppressPodCommunicationInBackground"
-        case glucoseDisplayUrgentLow = "com.loopkit.Loop.glucoseDisplayUrgentLow"
-        case glucoseDisplayLow = "com.loopkit.Loop.glucoseDisplayLow"
-        case glucoseDisplayHigh = "com.loopkit.Loop.glucoseDisplayHigh"
-        case glucoseDisplayUrgentHigh = "com.loopkit.Loop.glucoseDisplayUrgentHigh"
+        case glucoseUrgentLow = "com.loopkit.Loop.glucoseUrgentLow"
+        case glucoseLow = "com.loopkit.Loop.glucoseLow"
+        case glucoseHigh = "com.loopkit.Loop.glucoseHigh"
+        case glucoseUrgentHigh = "com.loopkit.Loop.glucoseUrgentHigh"
     }
 
     public static let appGroup = UserDefaults(suiteName: Bundle.main.appGroupSuiteName)
@@ -250,30 +250,29 @@ extension UserDefaults {
         return customLoopInterval
     }
 
-    public var glucoseDisplayUrgentLow: Double {
-        get { glucoseDisplayThreshold(.glucoseDisplayUrgentLow, default: LoopSettings.defaultGlucoseDisplayUrgentLow) }
-        set { set(newValue, forKey: Key.glucoseDisplayUrgentLow.rawValue) }
+    public var glucoseUrgentLow: Double {
+        get { glucoseThreshold(.glucoseUrgentLow, legacyKey: "com.loopkit.Loop.glucoseDisplayUrgentLow", default: LoopSettings.defaultGlucoseUrgentLow) }
+        set { set(newValue, forKey: Key.glucoseUrgentLow.rawValue) }
     }
 
-    public var glucoseDisplayLow: Double {
-        get { glucoseDisplayThreshold(.glucoseDisplayLow, default: LoopSettings.defaultGlucoseDisplayLow) }
-        set { set(newValue, forKey: Key.glucoseDisplayLow.rawValue) }
+    public var glucoseLow: Double {
+        get { glucoseThreshold(.glucoseLow, legacyKey: "com.loopkit.Loop.glucoseDisplayLow", default: LoopSettings.defaultGlucoseLow) }
+        set { set(newValue, forKey: Key.glucoseLow.rawValue) }
     }
 
-    public var glucoseDisplayHigh: Double {
-        get { glucoseDisplayThreshold(.glucoseDisplayHigh, default: LoopSettings.defaultGlucoseDisplayHigh) }
-        set { set(newValue, forKey: Key.glucoseDisplayHigh.rawValue) }
+    public var glucoseHigh: Double {
+        get { glucoseThreshold(.glucoseHigh, legacyKey: "com.loopkit.Loop.glucoseDisplayHigh", default: LoopSettings.defaultGlucoseHigh) }
+        set { set(newValue, forKey: Key.glucoseHigh.rawValue) }
     }
 
-    public var glucoseDisplayUrgentHigh: Double {
-        get { glucoseDisplayThreshold(.glucoseDisplayUrgentHigh, default: LoopSettings.defaultGlucoseDisplayUrgentHigh) }
-        set { set(newValue, forKey: Key.glucoseDisplayUrgentHigh.rawValue) }
+    public var glucoseUrgentHigh: Double {
+        get { glucoseThreshold(.glucoseUrgentHigh, legacyKey: "com.loopkit.Loop.glucoseDisplayUrgentHigh", default: LoopSettings.defaultGlucoseUrgentHigh) }
+        set { set(newValue, forKey: Key.glucoseUrgentHigh.rawValue) }
     }
 
-    private func glucoseDisplayThreshold(_ key: Key, default defaultValue: Double) -> Double {
-        guard let value = object(forKey: key.rawValue) as? Double else {
-            return defaultValue
-        }
-        return value
+    private func glucoseThreshold(_ key: Key, legacyKey: String, default defaultValue: Double) -> Double {
+        return (object(forKey: key.rawValue) as? Double)
+            ?? (object(forKey: legacyKey) as? Double)
+            ?? defaultValue
     }
 }

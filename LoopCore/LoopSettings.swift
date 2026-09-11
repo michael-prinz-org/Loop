@@ -104,20 +104,20 @@ public struct LoopSettings: Equatable {
     /// Independent of `customLoopIntervalEnabled` and of closed loop; never blocks an automatic dose.
     public var suppressPodCommunicationInBackground = false
 
-    public static let defaultGlucoseDisplayUrgentLow: Double = 54
-    public static let defaultGlucoseDisplayLow: Double = 70
-    public static let defaultGlucoseDisplayHigh: Double = 180
-    public static let defaultGlucoseDisplayUrgentHigh: Double = 250
+    public static let defaultGlucoseUrgentLow: Double = 54
+    public static let defaultGlucoseLow: Double = 70
+    public static let defaultGlucoseHigh: Double = 180
+    public static let defaultGlucoseUrgentHigh: Double = 250
 
     /// Bounds accepted by the glucose display range editor, in mg/dL.
     public static let glucoseDisplayRangeBounds: ClosedRange<Double> = 40...400
 
     /// Thresholds, in mg/dL, that colour glucose values on the watch complication. Independent of the
     /// therapy correction range and of Loop's own CGM status colours.
-    public var glucoseDisplayUrgentLow: Double = LoopSettings.defaultGlucoseDisplayUrgentLow
-    public var glucoseDisplayLow: Double = LoopSettings.defaultGlucoseDisplayLow
-    public var glucoseDisplayHigh: Double = LoopSettings.defaultGlucoseDisplayHigh
-    public var glucoseDisplayUrgentHigh: Double = LoopSettings.defaultGlucoseDisplayUrgentHigh
+    public var glucoseUrgentLow: Double = LoopSettings.defaultGlucoseUrgentLow
+    public var glucoseLow: Double = LoopSettings.defaultGlucoseLow
+    public var glucoseHigh: Double = LoopSettings.defaultGlucoseHigh
+    public var glucoseUrgentHigh: Double = LoopSettings.defaultGlucoseUrgentHigh
 
     public var glucoseUnit: HKUnit? {
         return glucoseTargetRangeSchedule?.unit
@@ -351,17 +351,17 @@ extension LoopSettings: RawRepresentable {
             self.suppressPodCommunicationInBackground = suppressPodCommunicationInBackground
         }
 
-        if let value = rawValue["glucoseDisplayUrgentLow"] as? Double {
-            self.glucoseDisplayUrgentLow = value
+        if let value = (rawValue["glucoseUrgentLow"] as? Double) ?? (rawValue["glucoseDisplayUrgentLow"] as? Double) {
+            self.glucoseUrgentLow = value
         }
-        if let value = rawValue["glucoseDisplayLow"] as? Double {
-            self.glucoseDisplayLow = value
+        if let value = (rawValue["glucoseLow"] as? Double) ?? (rawValue["glucoseDisplayLow"] as? Double) {
+            self.glucoseLow = value
         }
-        if let value = rawValue["glucoseDisplayHigh"] as? Double {
-            self.glucoseDisplayHigh = value
+        if let value = (rawValue["glucoseHigh"] as? Double) ?? (rawValue["glucoseDisplayHigh"] as? Double) {
+            self.glucoseHigh = value
         }
-        if let value = rawValue["glucoseDisplayUrgentHigh"] as? Double {
-            self.glucoseDisplayUrgentHigh = value
+        if let value = (rawValue["glucoseUrgentHigh"] as? Double) ?? (rawValue["glucoseDisplayUrgentHigh"] as? Double) {
+            self.glucoseUrgentHigh = value
         }
     }
 
@@ -384,10 +384,10 @@ extension LoopSettings: RawRepresentable {
         raw["customLoopIntervalEnabled"] = customLoopIntervalEnabled
         raw["customLoopInterval"] = customLoopInterval
         raw["suppressPodCommunicationInBackground"] = suppressPodCommunicationInBackground
-        raw["glucoseDisplayUrgentLow"] = glucoseDisplayUrgentLow
-        raw["glucoseDisplayLow"] = glucoseDisplayLow
-        raw["glucoseDisplayHigh"] = glucoseDisplayHigh
-        raw["glucoseDisplayUrgentHigh"] = glucoseDisplayUrgentHigh
+        raw["glucoseUrgentLow"] = glucoseUrgentLow
+        raw["glucoseLow"] = glucoseLow
+        raw["glucoseHigh"] = glucoseHigh
+        raw["glucoseUrgentHigh"] = glucoseUrgentHigh
         
         return raw
     }
@@ -410,10 +410,10 @@ public struct GlucoseDisplayRange: Equatable {
     /// Smallest gap enforced between adjacent thresholds, in mg/dL.
     private static let minimumSeparation: Double = 1
 
-    public init(urgentLow: Double = LoopSettings.defaultGlucoseDisplayUrgentLow,
-                low: Double = LoopSettings.defaultGlucoseDisplayLow,
-                high: Double = LoopSettings.defaultGlucoseDisplayHigh,
-                urgentHigh: Double = LoopSettings.defaultGlucoseDisplayUrgentHigh)
+    public init(urgentLow: Double = LoopSettings.defaultGlucoseUrgentLow,
+                low: Double = LoopSettings.defaultGlucoseLow,
+                high: Double = LoopSettings.defaultGlucoseHigh,
+                urgentHigh: Double = LoopSettings.defaultGlucoseUrgentHigh)
     {
         let bounds = LoopSettings.glucoseDisplayRangeBounds
         self.urgentLow = min(max(urgentLow, bounds.lowerBound), bounds.upperBound)
@@ -426,16 +426,16 @@ public struct GlucoseDisplayRange: Equatable {
 extension LoopSettings {
     public var glucoseDisplayRange: GlucoseDisplayRange {
         get {
-            GlucoseDisplayRange(urgentLow: glucoseDisplayUrgentLow,
-                                low: glucoseDisplayLow,
-                                high: glucoseDisplayHigh,
-                                urgentHigh: glucoseDisplayUrgentHigh)
+            GlucoseDisplayRange(urgentLow: glucoseUrgentLow,
+                                low: glucoseLow,
+                                high: glucoseHigh,
+                                urgentHigh: glucoseUrgentHigh)
         }
         set {
-            glucoseDisplayUrgentLow = newValue.urgentLow
-            glucoseDisplayLow = newValue.low
-            glucoseDisplayHigh = newValue.high
-            glucoseDisplayUrgentHigh = newValue.urgentHigh
+            glucoseUrgentLow = newValue.urgentLow
+            glucoseLow = newValue.low
+            glucoseHigh = newValue.high
+            glucoseUrgentHigh = newValue.urgentHigh
         }
     }
 
@@ -443,10 +443,10 @@ extension LoopSettings {
     public func glucoseDisplayTier(for quantity: HKQuantity) -> GlucoseDisplayTier {
         let value = quantity.doubleValue(for: .milligramsPerDeciliter)
 
-        if value < glucoseDisplayUrgentLow || value > glucoseDisplayUrgentHigh {
+        if value < glucoseUrgentLow || value > glucoseUrgentHigh {
             return .urgent
         }
-        if value < glucoseDisplayLow || value > glucoseDisplayHigh {
+        if value < glucoseLow || value > glucoseHigh {
             return .outOfRange
         }
         return .inRange
@@ -457,7 +457,7 @@ extension LoopSettings {
     public func glucoseDisplayTier(forPredicted quantity: HKQuantity, at date: Date) -> GlucoseDisplayTier {
         let value = quantity.doubleValue(for: .milligramsPerDeciliter)
 
-        if value < glucoseDisplayUrgentLow || value > glucoseDisplayUrgentHigh {
+        if value < glucoseUrgentLow || value > glucoseUrgentHigh {
             return .urgent
         }
 

@@ -333,13 +333,6 @@ extension SettingsView {
                             descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
             }
 
-            NavigationLink(destination: glucoseDisplayRangeView) {
-                VStack(alignment: .leading) {
-                    Text(NSLocalizedString("Glucose Display Range", comment: "Title text for the glucose display range editor"))
-                    DescriptiveText(label: NSLocalizedString("Colors on the watch complication", comment: "Descriptive text for the glucose display range editor"))
-                }
-            }
-
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
                 item.view
             }
@@ -348,11 +341,6 @@ extension SettingsView {
                 algorithmExperimentsSection
             }
         }
-    }
-
-    private var glucoseDisplayRangeView: some View {
-        GlucoseDisplayRangeEditorView(range: $viewModel.glucoseDisplayRange)
-            .environmentObject(displayGlucosePreference)
     }
 
     private var pluginMenuItems: [PluginMenuItem<some View>] {
@@ -689,58 +677,6 @@ fileprivate struct LargeButton<Content: View, SecondaryContent: View>: View {
             }
             .padding(EdgeInsets(top: topBottomPadding, leading: 0, bottom: topBottomPadding, trailing: 0))
         }
-    }
-}
-
-struct GlucoseDisplayRangeEditorView: View {
-    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
-
-    @Binding var range: GlucoseDisplayRange
-
-    var body: some View {
-        List {
-            Section(footer: DescriptiveText(label: NSLocalizedString("These thresholds color the glucose value on the watch complication. They do not affect dosing or the correction range.", comment: "Footer for the glucose display range editor"))) {
-                // Deliberately untranslated: these match the complication colour tiers by name.
-                row("Urgent Low", value: $range.urgentLow)
-                row("Low", value: $range.low)
-                row("High", value: $range.high)
-                row("Urgent High", value: $range.urgentHigh)
-            }
-        }
-        .insetGroupedListStyle()
-        .navigationBarTitle(Text(NSLocalizedString("Glucose Display Range", comment: "Title text for the glucose display range editor")))
-    }
-
-    /// One display-unit step: 1 mg/dL, or 0.1 mmol/L expressed in mg/dL.
-    private var step: Double {
-        displayGlucosePreference.unit == .millimolesPerLiter
-            ? HKQuantity(unit: .millimolesPerLiter, doubleValue: 0.1).doubleValue(for: .milligramsPerDeciliter)
-            : 1
-    }
-
-    private func row(_ label: String, value: Binding<Double>) -> some View {
-        Stepper(value: stepperBinding(for: value), step: step) {
-            HStack {
-                Text(label)
-                Spacer()
-                Text(displayGlucosePreference.format(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: value.wrappedValue)))
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    // Re-initializing GlucoseDisplayRange re-applies the ordering constraints after every step.
-    private func stepperBinding(for value: Binding<Double>) -> Binding<Double> {
-        Binding(
-            get: { value.wrappedValue },
-            set: { newValue in
-                value.wrappedValue = newValue
-                range = GlucoseDisplayRange(urgentLow: range.urgentLow,
-                                            low: range.low,
-                                            high: range.high,
-                                            urgentHigh: range.urgentHigh)
-            }
-        )
     }
 }
 

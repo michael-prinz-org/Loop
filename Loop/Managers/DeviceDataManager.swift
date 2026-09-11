@@ -1858,6 +1858,10 @@ extension DeviceDataManager: TherapySettingsViewModelDelegate {
             settings.defaultRapidActingModel = therapySettings.defaultRapidActingModel
             settings.carbRatioSchedule = therapySettings.carbRatioSchedule
             settings.insulinSensitivitySchedule = therapySettings.insulinSensitivitySchedule
+            settings.glucoseUrgentLow = therapySettings.glucoseUrgentLow
+            settings.glucoseLow = therapySettings.glucoseLow
+            settings.glucoseHigh = therapySettings.glucoseHigh
+            settings.glucoseUrgentHigh = therapySettings.glucoseUrgentHigh
         }
     }
     
