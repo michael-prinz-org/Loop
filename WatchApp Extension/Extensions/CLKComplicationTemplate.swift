@@ -261,7 +261,8 @@ extension CLKComplicationTemplate {
             providers.append(loopStatusText)
         }
 
-        let glucoseText = CLKSimpleTextProvider(text: glucoseString, shortText: glucoseString, accessibilityLabel: glucoseString)
+        let glucosePrefix = isClosedLoop == nil ? "" : " "
+        let glucoseText = CLKSimpleTextProvider(text: glucosePrefix + glucoseString, shortText: glucoseString, accessibilityLabel: glucoseString)
         glucoseText.tintColor = glucoseDisplayTier?.complicationColor ?? freshnessColor
         providers.append(glucoseText)
 
@@ -272,25 +273,25 @@ extension CLKComplicationTemplate {
         }
 
         if let activeInsulin, let insulinString = compactString(from: activeInsulin, formatter: complicationInsulinFormatter, unit: "AI") {
-            let insulinText = CLKSimpleTextProvider(text: insulinString, shortText: insulinString, accessibilityLabel: insulinString)
+            let insulinText = CLKSimpleTextProvider(text: "  " + insulinString, shortText: insulinString, accessibilityLabel: insulinString)
             insulinText.tintColor = .cyan
             providers.append(insulinText)
         }
 
         if let podWakeUpCount {
-            let wakeUpCountText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x", shortText: "\(podWakeUpCount)x", accessibilityLabel: "\(podWakeUpCount)x")
-            wakeUpCountText.tintColor = .purple
+            let wakeUpCountText = CLKSimpleTextProvider(text: "  \(podWakeUpCount)x", shortText: "\(podWakeUpCount)x", accessibilityLabel: "\(podWakeUpCount)x")
+            wakeUpCountText.tintColor = .pink
             providers.append(wakeUpCountText)
 
             if let lastPodWakeUpDate {
                 let timeString = DateFormatter.localizedString(from: lastPodWakeUpDate, dateStyle: .none, timeStyle: .short)
-                let wakeUpTimeText = CLKSimpleTextProvider(text: timeString)
+                let wakeUpTimeText = CLKSimpleTextProvider(text: "  " + timeString)
                 wakeUpTimeText.tintColor = .white
                 providers.append(wakeUpTimeText)
             }
         }
 
-        return CLKTextProvider(byJoining: providers, separator: "  ")
+        return CLKTextProvider(byJoining: providers, separator: "")
     }
 
     /// Value and unit without the usual separating space, to save room on the complication. Pass `unit` to

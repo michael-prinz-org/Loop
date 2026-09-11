@@ -192,17 +192,24 @@ final class ComplicationChartManager {
             return
         }
 
-        let trendPath = CGMutablePath()
-        trendPath.addLines(between: historicalGlucose.map { scaler.point(for: $0, unit: unit) })
-        context.setStrokeColor(UIColor.glucose.cgColor)
-        context.setLineWidth(1)
-        context.addPath(trendPath)
-        context.strokePath()
+        if historicalGlucose.count > 1 {
+            context.setLineWidth(1)
+            for index in 1..<historicalGlucose.count {
+                let previous = historicalGlucose[index - 1]
+                let current = historicalGlucose[index]
+                let trendPath = CGMutablePath()
+                trendPath.move(to: scaler.point(for: previous, unit: unit))
+                trendPath.addLine(to: scaler.point(for: current, unit: unit))
+                context.setStrokeColor(chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).cgColor)
+                context.addPath(trendPath)
+                context.strokePath()
+            }
+        }
 
-        context.setFillColor(UIColor.glucose.cgColor)
         historicalGlucose.forEach { glucose in
             let origin = scaler.point(for: glucose, unit: unit)
             let glucoseRect = CGRect(origin: origin, size: .glucosePoint).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
+            context.setFillColor(chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: glucose.quantity) ?? .inRange).cgColor)
             context.fill(glucoseRect)
         }
     }
@@ -211,12 +218,28 @@ final class ComplicationChartManager {
         guard let predictedGlucose = data?.predictedGlucose, predictedGlucose.count > 2 else {
             return
         }
-        let predictedPath = CGMutablePath()
-        let glucosePoints = predictedGlucose.map { scaler.point(for: $0, unit: unit) }
-        predictedPath.addLines(between: glucosePoints)
-        let dashedPath = predictedPath.copy(dashingWithPhase: .predictionDashPhase, lengths: predictionDashLengths)
-        context.setStrokeColor(UIColor.white.cgColor)
-        context.addPath(dashedPath)
-        context.strokePath()
+        context.setLineWidth(2)
+        for index in 1..<predictedGlucose.count {
+            let previous = predictedGlucose[index - 1]
+            let current = predictedGlucose[index]
+            let predictedPath = CGMutablePath()
+            predictedPath.move(to: scaler.point(for: previous, unit: unit))
+            predictedPath.addLine(to: scaler.point(for: current, unit: unit))
+            let dashedPath = predictedPath.copy(dashingWithPhase: .predictionDashPhase, lengths: predictionDashLengths)
+            context.setStrokeColor(chartColor(for: data?.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate) ?? .inRange).cgColor)
+            context.addPath(dashedPath)
+            context.strokePath()
+        }
+    }
+
+    private static func chartColor(for tier: GlucoseDisplayTier) -> UIColor {
+        switch tier {
+        case .inRange:
+            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 0.82)
+        case .outOfRange:
+            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 0.72)
+        case .urgent:
+            return UIColor(red: 1, green: 59 / 255, blue: 48 / 255, alpha: 0.78)
+        }
     }
 }

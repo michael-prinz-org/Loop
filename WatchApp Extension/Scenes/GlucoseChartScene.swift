@@ -113,6 +113,7 @@ class GlucoseChartScene: SKScene {
     private var minBGLabel: SKLabelNode!
     private var nodes: [Int: SKSpriteNode] = [:]
     private var predictedPathNodes: [SKShapeNode] = []
+    private var historicalPathNodes: [SKShapeNode] = []
 
     private var needsUpdate = true
     private var shouldAnimatePredictionPath = false
@@ -296,7 +297,27 @@ class GlucoseChartScene: SKScene {
             plotOverride(override, pushingStartTo: data.activePreMealOverride?.scheduledEndDate, extendingToChartEnd: data.activePreMealOverride == nil)
         }
 
-        data.historicalGlucose?.filter { scaler.dates.contains($0.startDate) }.forEach {
+        historicalPathNodes.forEach { $0.removeFromParent() }
+        historicalPathNodes.removeAll()
+        let historicalGlucose = data.historicalGlucose?.filter { scaler.dates.contains($0.startDate) } ?? []
+
+        if historicalGlucose.count > 1 {
+            for index in 1..<historicalGlucose.count {
+                let previous = historicalGlucose[index - 1]
+                let current = historicalGlucose[index]
+                let historicalPath = CGMutablePath()
+                historicalPath.move(to: scaler.point(previous.startDate, previous.quantity.doubleValue(for: unit)))
+                historicalPath.addLine(to: scaler.point(current.startDate, current.quantity.doubleValue(for: unit)))
+                let historicalPathNode = SKShapeNode(path: historicalPath)
+                historicalPathNode.strokeColor = chartColor(for: data.glucoseSettings.glucoseDisplayTier(for: current.quantity))
+                historicalPathNode.lineWidth = 1
+                historicalPathNode.zPosition = NodePlane.lines.zPosition
+                addChild(historicalPathNode)
+                historicalPathNodes.append(historicalPathNode)
+            }
+        }
+
+        historicalGlucose.forEach {
             let center = scaler.point($0.startDate, $0.quantity.doubleValue(for: unit))
             let size = CGSize(width: 2, height: 2)
             let origin = CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2)
