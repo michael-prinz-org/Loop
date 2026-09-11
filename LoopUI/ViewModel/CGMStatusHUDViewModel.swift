@@ -160,7 +160,7 @@ public class CGMStatusHUDViewModel {
             setManualGlucoseTrendIconOverride()
         } else if let trend = glucoseDisplay?.trendType, glucoseValueCurrent {
             self.trend = trend
-            glucoseTrendTintColor = glucoseDisplay?.glucoseRangeCategory?.trendColor ?? .glucoseTintColor
+            glucoseTrendTintColor = trend.loopTrendColor
             accessibilityStrings.append(trend.localizedDescription)
         } else {
             glucoseTrendTintColor = .glucoseTintColor

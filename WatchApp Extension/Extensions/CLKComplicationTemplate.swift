@@ -34,6 +34,7 @@ extension CLKComplicationTemplate {
             at: date,
             loopLastRunDate: context.loopLastRunDate,
             loopInterval: context.loopInterval ?? LoopCompletionFreshness.defaultLoopInterval,
+            isClosedLoop: context.isClosedLoop,
             recencyInterval: recencyInterval,
             activeInsulin: context.activeInsulin,
             activeCarbohydrates: context.activeCarbohydrates,
@@ -54,6 +55,7 @@ extension CLKComplicationTemplate {
         at date: Date,
         loopLastRunDate: Date?,
         loopInterval: TimeInterval = LoopCompletionFreshness.defaultLoopInterval,
+        isClosedLoop: Bool? = nil,
         recencyInterval: TimeInterval,
         activeInsulin: HKQuantity? = nil,
         activeCarbohydrates: HKQuantity? = nil,
@@ -200,10 +202,9 @@ extension CLKComplicationTemplate {
                                                           glucoseString: glucoseString,
                                                           accessibilityLabel: accessibilityStrings.joined(separator: ", "),
                                                           glucoseDisplayTier: glucoseDisplayTier,
-                                                          eventualGlucose: eventualGlucose,
-                                                          eventualGlucoseDisplayTier: eventualGlucoseDisplayTier,
-                                                          unit: unit,
-                                                          formatter: formatter,
+                                                          trend: trend,
+                                                          isClosedLoop: isClosedLoop,
+                                                          loopStatusColor: tintColor,
                                                           activeInsulin: activeInsulin,
                                                           freshnessColor: tintColor,
                                                           fallbackTimeText: timeText,
@@ -243,55 +244,53 @@ extension CLKComplicationTemplate {
         glucoseString: String,
         accessibilityLabel: String,
         glucoseDisplayTier: GlucoseDisplayTier?,
-        eventualGlucose: HKQuantity?,
-        eventualGlucoseDisplayTier: GlucoseDisplayTier?,
-        unit: HKUnit,
-        formatter: NumberFormatter,
+        trend: GlucoseTrend?,
+        isClosedLoop: Bool?,
+        loopStatusColor: UIColor,
         activeInsulin: HKQuantity?,
         freshnessColor: UIColor,
         fallbackTimeText: CLKTextProvider,
         podWakeUpCount: Int?,
         lastPodWakeUpDate: Date?
     ) -> CLKTextProvider {
-        let glucoseTint = glucoseDisplayTier?.complicationColor ?? freshnessColor
-
         var providers: [CLKTextProvider] = []
 
-        if let eventualGlucose, let eventualString = formatter.string(from: eventualGlucose.doubleValue(for: unit)) {
-            // Current (with trend arrow) and eventual joined tightly as "current<trend>eventual"; each keeps its own tier color.
-            let currentText = CLKSimpleTextProvider(text: glucoseAndTrend, shortText: glucoseString, accessibilityLabel: accessibilityLabel)
-            currentText.tintColor = glucoseTint
-            let eventualText = CLKSimpleTextProvider(text: eventualString)
-            eventualText.tintColor = eventualGlucoseDisplayTier?.complicationColor ?? freshnessColor
-            providers.append(CLKTextProvider(byJoining: [currentText, eventualText], separator: ""))
-        } else {
-            // Without an eventual value, keep the trend arrow and the ticking "time ago".
-            let glucoseText = CLKSimpleTextProvider(text: glucoseAndTrend, shortText: glucoseString, accessibilityLabel: accessibilityLabel)
-            glucoseText.tintColor = glucoseTint
-            providers.append(glucoseText)
-            providers.append(fallbackTimeText)
+        if let isClosedLoop {
+            let loopStatusText = CLKSimpleTextProvider(text: isClosedLoop ? "●" : "○")
+            loopStatusText.tintColor = loopStatusColor
+            providers.append(loopStatusText)
+        }
+
+        let glucoseText = CLKSimpleTextProvider(text: glucoseString, shortText: glucoseString, accessibilityLabel: glucoseString)
+        glucoseText.tintColor = glucoseDisplayTier?.complicationColor ?? freshnessColor
+        providers.append(glucoseText)
+
+        if let trend {
+            let trendText = CLKSimpleTextProvider(text: trend.arrows, accessibilityLabel: trend.localizedDescription)
+            trendText.tintColor = trend.complicationColor
+            providers.append(trendText)
         }
 
         if let activeInsulin, let insulinString = compactString(from: activeInsulin, formatter: complicationInsulinFormatter, unit: "AI") {
             let insulinText = CLKSimpleTextProvider(text: insulinString)
-            insulinText.tintColor = .white
+            insulinText.tintColor = .systemCyan
             providers.append(insulinText)
         }
 
         if let podWakeUpCount {
-            let wakeUpText: CLKSimpleTextProvider
+            let wakeUpCountText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x")
+            wakeUpCountText.tintColor = .systemPurple
+            providers.append(wakeUpCountText)
+
             if let lastPodWakeUpDate {
                 let timeString = DateFormatter.localizedString(from: lastPodWakeUpDate, dateStyle: .none, timeStyle: .short)
-                wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x  \(timeString)")
-            } else {
-                wakeUpText = CLKSimpleTextProvider(text: "\(podWakeUpCount)x")
+                let wakeUpTimeText = CLKSimpleTextProvider(text: timeString)
+                wakeUpTimeText.tintColor = .white
+                providers.append(wakeUpTimeText)
             }
-            wakeUpText.tintColor = .white
-            providers.append(wakeUpText)
         }
 
-        // Two spaces keep the rectangular complication segments visually separate.
-        return CLKTextProvider(byJoining: providers, separator: "  ")
+        return CLKTextProvider(byJoining: providers, separator: " ")
     }
 
     /// Value and unit without the usual separating space, to save room on the complication. Pass `unit` to
@@ -310,11 +309,24 @@ extension GlucoseDisplayTier {
     var complicationColor: UIColor {
         switch self {
         case .inRange:
-            return .tintColor
+            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 1)
         case .outOfRange:
-            return .agingColor
+            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 1)
         case .urgent:
             return .staleColor
+        }
+    }
+}
+
+private extension GlucoseTrend {
+    var complicationColor: UIColor {
+        switch self {
+        case .flat:
+            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 1)
+        case .up, .down:
+            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 1)
+        case .upUp, .downDown, .upUpUp, .downDownDown:
+            return UIColor(red: 1, green: 59 / 255, blue: 48 / 255, alpha: 1)
         }
     }
 }

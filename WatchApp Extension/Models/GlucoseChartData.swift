@@ -13,6 +13,8 @@ import LoopKit
 
 struct GlucoseChartData {
     var unit: HKUnit?
+    var eventualGlucose: HKQuantity?
+    var eventualGlucoseDisplayTier: GlucoseDisplayTier?
 
     var correctionRange: GlucoseRangeSchedule?
 
@@ -36,8 +38,10 @@ struct GlucoseChartData {
 
     private(set) var predictedGlucoseRange: ClosedRange<HKQuantity>?
 
-    init(unit: HKUnit?, correctionRange: GlucoseRangeSchedule?, preMealOverride: TemporaryScheduleOverride?, scheduleOverride: TemporaryScheduleOverride?, historicalGlucose: [SampleValue]?, predictedGlucose: [SampleValue]?) {
+    init(unit: HKUnit?, eventualGlucose: HKQuantity?, eventualGlucoseDisplayTier: GlucoseDisplayTier?, correctionRange: GlucoseRangeSchedule?, preMealOverride: TemporaryScheduleOverride?, scheduleOverride: TemporaryScheduleOverride?, historicalGlucose: [SampleValue]?, predictedGlucose: [SampleValue]?) {
         self.unit = unit
+        self.eventualGlucose = eventualGlucose
+        self.eventualGlucoseDisplayTier = eventualGlucoseDisplayTier
         self.correctionRange = correctionRange
         self.preMealOverride = preMealOverride
         self.scheduleOverride = scheduleOverride

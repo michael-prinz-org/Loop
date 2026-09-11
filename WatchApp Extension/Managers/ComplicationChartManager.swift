@@ -11,6 +11,7 @@ import UIKit
 import HealthKit
 import WatchKit
 import LoopKit
+import LoopCore
 
 private let textInsets = UIEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
 
@@ -81,7 +82,7 @@ final class ComplicationChartManager {
         let glucoseRange = data.chartableGlucoseRange(from: spannedInterval)
         let scaler = GlucoseChartScaler(size: size, dateInterval: spannedInterval, glucoseRange: glucoseRange, unit: unit)
 
-        let drawingSteps = [drawTargetRange, drawOverridesIfNeeded, drawHistoricalGlucose, drawPredictedGlucose, drawGlucoseLabels]
+        let drawingSteps = [drawTargetRange, drawOverridesIfNeeded, drawHistoricalGlucose, drawPredictedGlucose, drawGlucoseLabels, drawEventualGlucoseLabel]
         drawingSteps.forEach { drawIn in drawIn(context, scaler) }
     }
 
@@ -89,6 +90,24 @@ final class ComplicationChartManager {
         let formatter = NumberFormatter.glucoseFormatter(for: unit)
         drawGlucoseLabelText(formatter.string(from: scaler.glucoseMax)!, position: .high, scaler: scaler)
         drawGlucoseLabelText(formatter.string(from: scaler.glucoseMin)!, position: .low, scaler: scaler)
+    }
+
+    private func drawEventualGlucoseLabel(in context: CGContext, using scaler: GlucoseChartScaler) {
+        guard let eventualGlucose = data?.eventualGlucose,
+              let text = NumberFormatter.glucoseFormatter(for: unit).string(from: eventualGlucose.doubleValue(for: unit))
+        else {
+            return
+        }
+
+        let attributedText = NSAttributedString(string: text, attributes: [
+            .font: UIFont(name: "HelveticaNeue-Bold", size: 10)!,
+            .foregroundColor: data?.eventualGlucoseDisplayTier?.complicationColor ?? UIColor.chartLabel
+        ])
+        let size = attributedText.size()
+        let x = scaler.xCoordinate(for: scaler.dates.end) - size.width - textInsets.right
+        let y = scaler.yCoordinate(for: (scaler.glucoseMin + scaler.glucoseMax) / 2) - size.height / 2
+        let rect = CGRect(origin: CGPoint(x: x, y: y), size: size).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
+        attributedText.draw(with: rect, options: .usesLineFragmentOrigin, context: nil)
     }
 
     private func drawGlucoseLabelText(_ text: String, position: GlucoseLabelPosition, scaler: GlucoseChartScaler) {
@@ -165,10 +184,23 @@ final class ComplicationChartManager {
     }
 
     private func drawHistoricalGlucose(in context: CGContext, using scaler: GlucoseChartScaler) {
-        context.setFillColor(UIColor.glucose.cgColor)
-        data?.historicalGlucose?.lazy.filter {
+        let historicalGlucose = data?.historicalGlucose?.filter {
             scaler.dates.contains($0.startDate)
-        }.forEach { glucose in
+        } ?? []
+
+        guard !historicalGlucose.isEmpty else {
+            return
+        }
+
+        let trendPath = CGMutablePath()
+        trendPath.addLines(between: historicalGlucose.map { scaler.point(for: $0, unit: unit) })
+        context.setStrokeColor(UIColor.glucose.cgColor)
+        context.setLineWidth(1)
+        context.addPath(trendPath)
+        context.strokePath()
+
+        context.setFillColor(UIColor.glucose.cgColor)
+        historicalGlucose.forEach { glucose in
             let origin = scaler.point(for: glucose, unit: unit)
             let glucoseRect = CGRect(origin: origin, size: .glucosePoint).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
             context.fill(glucoseRect)

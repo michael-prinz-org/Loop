@@ -83,7 +83,7 @@ class HUDInterfaceController: WKInterfaceController {
                 let formatter = NumberFormatter.glucoseFormatter(for: unit)
                 
                 if let glucoseValue = formatter.string(from: glucose.doubleValue(for: unit)) {
-                    let trend = activeContext.glucoseTrend?.symbol ?? ""
+                    let trend = activeContext.glucoseTrend?.arrows ?? ""
                     glucoseLabel.setText(glucoseValue + trend)
                 }
                 

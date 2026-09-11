@@ -11,12 +11,12 @@ import LoopKit
 extension GlucoseRangeCategory {
     public var glucoseColor: UIColor {
         switch self {
-        case .normal, .high, .low:
-            return .label
+        case .high, .low, .aboveRange:
+            return .systemOrange
+        case .normal:
+            return .freshColor
         case .urgentLow, .belowRange:
             return .critical
-        case .aboveRange:
-            return .warning
         }
     }
     
@@ -28,6 +28,19 @@ extension GlucoseRangeCategory {
             return .critical
         case .low, .high, .aboveRange:
             return .warning
+        }
+    }
+}
+
+extension GlucoseTrend {
+    public var loopTrendColor: UIColor {
+        switch self {
+        case .flat:
+            return .freshColor
+        case .up, .down:
+            return .systemOrange
+        case .upUp, .downDown, .upUpUp, .downDownDown:
+            return .critical
         }
     }
 }
