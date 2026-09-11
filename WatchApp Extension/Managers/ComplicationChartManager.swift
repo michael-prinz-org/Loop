@@ -200,7 +200,7 @@ final class ComplicationChartManager {
                 let trendPath = CGMutablePath()
                 trendPath.move(to: scaler.point(for: previous, unit: unit))
                 trendPath.addLine(to: scaler.point(for: current, unit: unit))
-                context.setStrokeColor(chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).cgColor)
+                context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).cgColor)
                 context.addPath(trendPath)
                 context.strokePath()
             }
@@ -209,7 +209,7 @@ final class ComplicationChartManager {
         historicalGlucose.forEach { glucose in
             let origin = scaler.point(for: glucose, unit: unit)
             let glucoseRect = CGRect(origin: origin, size: .glucosePoint).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
-            context.setFillColor(chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: glucose.quantity) ?? .inRange).cgColor)
+            context.setFillColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: glucose.quantity) ?? .inRange).cgColor)
             context.fill(glucoseRect)
         }
     }
@@ -226,7 +226,7 @@ final class ComplicationChartManager {
             predictedPath.move(to: scaler.point(for: previous, unit: unit))
             predictedPath.addLine(to: scaler.point(for: current, unit: unit))
             let dashedPath = predictedPath.copy(dashingWithPhase: .predictionDashPhase, lengths: predictionDashLengths)
-            context.setStrokeColor(chartColor(for: data?.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate) ?? .inRange).cgColor)
+            context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate) ?? .inRange).cgColor)
             context.addPath(dashedPath)
             context.strokePath()
         }

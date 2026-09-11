@@ -280,7 +280,7 @@ extension CLKComplicationTemplate {
 
         if let podWakeUpCount {
             let wakeUpCountText = CLKSimpleTextProvider(text: "  \(podWakeUpCount)x", shortText: "\(podWakeUpCount)x", accessibilityLabel: "\(podWakeUpCount)x")
-            wakeUpCountText.tintColor = .pink
+            wakeUpCountText.tintColor = .wakeUpCountColor
             providers.append(wakeUpCountText)
 
             if let lastPodWakeUpDate {
