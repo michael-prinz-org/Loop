@@ -285,7 +285,7 @@ extension CLKComplicationTemplate {
 
             if let lastPodWakeUpDate {
                 let timeString = DateFormatter.localizedString(from: lastPodWakeUpDate, dateStyle: .none, timeStyle: .short)
-                let wakeUpTimeText = CLKSimpleTextProvider(text: "  " + timeString)
+                let wakeUpTimeText = CLKSimpleTextProvider(text: " " + timeString)
                 wakeUpTimeText.tintColor = .white
                 providers.append(wakeUpTimeText)
             }

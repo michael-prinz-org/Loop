@@ -107,6 +107,8 @@ final class ComplicationChartManager {
         let x = scaler.xCoordinate(for: scaler.dates.end) - size.width - textInsets.right
         let y = scaler.yCoordinate(for: (scaler.glucoseMin + scaler.glucoseMax) / 2) - size.height / 2
         let rect = CGRect(origin: CGPoint(x: x, y: y), size: size).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
+        context.setFillColor(UIColor.black.cgColor)
+        context.fill(rect.insetBy(dx: -2, dy: -1))
         attributedText.draw(with: rect, options: NSStringDrawingOptions.usesLineFragmentOrigin, context: nil)
     }
 
@@ -192,20 +194,6 @@ final class ComplicationChartManager {
             return
         }
 
-        if historicalGlucose.count > 1 {
-            context.setLineWidth(1)
-            for index in 1..<historicalGlucose.count {
-                let previous = historicalGlucose[index - 1]
-                let current = historicalGlucose[index]
-                let trendPath = CGMutablePath()
-                trendPath.move(to: scaler.point(for: previous, unit: unit))
-                trendPath.addLine(to: scaler.point(for: current, unit: unit))
-                context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).cgColor)
-                context.addPath(trendPath)
-                context.strokePath()
-            }
-        }
-
         historicalGlucose.forEach { glucose in
             let origin = scaler.point(for: glucose, unit: unit)
             let glucoseRect = CGRect(origin: origin, size: .glucosePoint).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
@@ -215,7 +203,11 @@ final class ComplicationChartManager {
     }
 
     private func drawPredictedGlucose(in context: CGContext, using scaler: GlucoseChartScaler) {
-        guard let predictedGlucose = data?.predictedGlucose, predictedGlucose.count > 2 else {
+        let predictedGlucose = data?.predictedGlucose?.filter {
+            scaler.dates.contains($0.startDate)
+        } ?? []
+
+        guard predictedGlucose.count > 1 else {
             return
         }
         context.setLineWidth(2)

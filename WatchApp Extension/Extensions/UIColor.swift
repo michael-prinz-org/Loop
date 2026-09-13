@@ -28,7 +28,7 @@ extension UIColor {
 
     static let overrideColor = UIColor(named: "workout")!
 
-    static let wakeUpCountColor = UIColor(red: 250 / 255, green: 17 / 255, blue: 79 / 255, alpha: 1)
+    static let wakeUpCountColor = UIColor(red: 164 / 255, green: 119 / 255, blue: 245 / 255, alpha: 1)
 
     // Equivalent to workoutColor with alpha 0.14 on a black background
     static let darkOverrideColor = UIColor(named: "workout-dark")!
