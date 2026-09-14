@@ -226,7 +226,7 @@ final class ComplicationChartManager {
             predictedPath.addLine(to: currentPoint)
 
             context.setLineDash(phase: dashPhase, lengths: predictionDashLengths)
-            context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate) ?? .inRange).cgColor)
+            context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).cgColor)
             context.addPath(predictedPath)
             context.strokePath()
 

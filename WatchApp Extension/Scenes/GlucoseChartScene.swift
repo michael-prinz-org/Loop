@@ -339,7 +339,7 @@ class GlucoseChartScene: SKScene {
                 predictedPath.addLine(to: scaler.point(current.startDate, current.quantity.doubleValue(for: unit)))
 
                 let predictedPathNode = SKShapeNode(path: predictedPath.copy(dashingWithPhase: 0, lengths: [5, 3]))
-                predictedPathNode.strokeColor = chartColor(for: data.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate))
+                predictedPathNode.strokeColor = chartColor(for: data.glucoseSettings.glucoseDisplayTier(for: current.quantity))
                     .withAlphaComponent(0.82)
                 predictedPathNode.lineWidth = 2
                 predictedPathNode.zPosition = NodePlane.values.zPosition
