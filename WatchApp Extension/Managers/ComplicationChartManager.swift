@@ -28,10 +28,6 @@ extension NSAttributedString {
     }
 }
 
-extension CGFloat {
-    fileprivate static let predictionDashPhase: CGFloat = 11
-}
-
 private let predictionDashLengths: [CGFloat] = [5, 3]
 
 
@@ -207,21 +203,36 @@ final class ComplicationChartManager {
             scaler.dates.contains($0.startDate)
         } ?? []
 
-        guard predictedGlucose.count > 1 else {
+        let historicalGlucose = data?.historicalGlucose?.filter {
+            scaler.dates.contains($0.startDate)
+        } ?? []
+        guard let latestGlucose = historicalGlucose.max(by: { $0.startDate < $1.startDate }) else {
             return
         }
-        context.setLineWidth(2)
-        for index in 1..<predictedGlucose.count {
-            let previous = predictedGlucose[index - 1]
-            let current = predictedGlucose[index]
-            let predictedPath = CGMutablePath()
-            predictedPath.move(to: scaler.point(for: previous, unit: unit))
-            predictedPath.addLine(to: scaler.point(for: current, unit: unit))
-            let dashedPath = predictedPath.copy(dashingWithPhase: .predictionDashPhase, lengths: predictionDashLengths)
-            context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate) ?? .inRange).cgColor)
-            context.addPath(dashedPath)
-            context.strokePath()
+
+        let predictionPoints = [latestGlucose] + predictedGlucose.filter { $0.startDate > latestGlucose.startDate }
+        guard predictionPoints.count > 1 else {
+            return
         }
+
+        context.setLineWidth(2)
+        var dashPhase: CGFloat = 0
+        for index in 1..<predictionPoints.count {
+            let previousPoint = scaler.point(for: predictionPoints[index - 1], unit: unit)
+            let current = predictionPoints[index]
+            let currentPoint = scaler.point(for: current, unit: unit)
+            let predictedPath = CGMutablePath()
+            predictedPath.move(to: previousPoint)
+            predictedPath.addLine(to: currentPoint)
+
+            context.setLineDash(phase: dashPhase, lengths: predictionDashLengths)
+            context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(forPredicted: current.quantity, at: current.startDate) ?? .inRange).cgColor)
+            context.addPath(predictedPath)
+            context.strokePath()
+
+            dashPhase += hypot(currentPoint.x - previousPoint.x, currentPoint.y - previousPoint.y)
+        }
+        context.setLineDash(phase: 0, lengths: [])
     }
 
     private static func chartColor(for tier: GlucoseDisplayTier) -> UIColor {
