@@ -618,6 +618,7 @@ extension LoopAppManager: TemporaryScheduleOverrideHistoryDelegate {
 
 extension LoopAppManager: ResetLoopManagerDelegate {
     func askUserToConfirmLoopReset() {
+        guard let resetLoopManager else { return }
         resetLoopManager.askUserToConfirmLoopReset()
     }
     
