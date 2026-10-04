@@ -1133,7 +1133,11 @@ extension DeviceDataManager: DeviceManagerDelegate {
                                     category: managerIdentifier,
                                     message: message)
     }
-    
+
+    func deviceManager(_ manager: DeviceManager, recordAnalyticsEvent name: String, properties: [AnyHashable: Any]?) {
+        analyticsServicesManager.deviceManagerDidRecordEvent(name, properties: properties)
+    }
+
     var allowDebugFeatures: Bool {
         FeatureFlags.allowDebugFeatures // NOTE: DEBUG FEATURES - DEBUG AND TEST ONLY
     }
