@@ -17,6 +17,7 @@ extension UserDefaults {
         case loopNotRunningNotifications = "com.loopkit.Loop.loopNotRunningNotifications"
         case inFlightAutomaticDose = "com.loopkit.Loop.inFlightAutomaticDose"
         case favoriteFoods = "com.loopkit.Loop.favoriteFoods"
+        case therapyProfiles = "com.loopkit.Loop.therapyProfiles"
     }
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {
@@ -109,4 +110,30 @@ extension UserDefaults {
             }
         }
     }
+
+    var therapyProfiles: [TherapyProfile] {
+        get {
+            guard let data = object(forKey: Key.therapyProfiles.rawValue) as? Data else {
+                return []
+            }
+            return (try? JSONDecoder().decode([TherapyProfile].self, from: data)) ?? []
+        }
+        set {
+            do {
+                let data = try JSONEncoder().encode(newValue)
+                set(data, forKey: Key.therapyProfiles.rawValue)
+            } catch {
+                assertionFailure("Unable to encode therapy profiles")
+            }
+        }
+    }
+}
+
+/// A named set of basal rates, carb ratios and insulin sensitivities the user can switch between.
+struct TherapyProfile: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    var basalRateSchedule: BasalRateSchedule
+    var carbRatioSchedule: CarbRatioSchedule
+    var insulinSensitivitySchedule: InsulinSensitivitySchedule
 }

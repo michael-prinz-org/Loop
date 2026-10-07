@@ -110,6 +110,8 @@ final class LoopDataManager {
         self.doseStore = doseStore
         self.glucoseStore = glucoseStore
 
+        TherapyOptimizer.shared.configure(doseStore: doseStore, glucoseStore: glucoseStore, carbStore: carbStore)
+
         self.dosingDecisionStore = dosingDecisionStore
 
         self.now = now
@@ -500,6 +502,7 @@ final class LoopDataManager {
         dosingDecisionStore.storeDosingDecision(dosingDecision) {}
 
         NotificationCenter.default.post(name: .LoopCompleted, object: self)
+        TherapyOptimizer.shared.loopDidComplete(overrides: overrideHistory.getEvents())
     }
 
     private func loopDidError(date: Date, error: LoopError, dosingDecision: StoredDosingDecision, duration: TimeInterval) {

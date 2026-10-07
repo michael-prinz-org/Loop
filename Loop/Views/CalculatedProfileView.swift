@@ -1,0 +1,253 @@
+//
+//  CalculatedProfileView.swift
+//  Loop
+//
+//  Read-only view of the TherapyOptimizer results.
+//
+
+import SwiftUI
+import HealthKit
+import LoopKit
+import LoopKitUI
+
+struct CalculatedProfileView: View {
+    @ObservedObject private var optimizer = TherapyOptimizer.shared
+    @ObservedObject var profiles: TherapyProfilesModel
+    @State private var showCreateSheet = false
+    @State private var showDisableConfirmation = false
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        List {
+            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides, lows or unannounced meals. The values are only displayed and never change dosing. Use them by creating a profile and activating it yourself.", comment: "Footer explaining the calculated therapy profile"))) {
+                Toggle(NSLocalizedString("Calculate Profile", comment: "Toggle that enables the therapy optimizer"), isOn: Binding(
+                    get: { optimizer.state != nil },
+                    set: { enabled in
+                        if enabled {
+                            optimizer.enable()
+                        } else {
+                            showDisableConfirmation = true
+                        }
+                    }
+                ))
+                if optimizer.isProcessing {
+                    HStack {
+                        Text(NSLocalizedString("Calculating…", comment: "Shown while the therapy optimizer processes data"))
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+                if let error = optimizer.lastError {
+                    Text(error).foregroundColor(.red)
+                }
+            }
+
+            if let state = optimizer.state {
+                statusSection(state)
+                basalSection(state)
+                sensitivitySection(state)
+                carbRatioSection(state)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(Text(NSLocalizedString("Calculated Profile", comment: "Title of the calculated therapy profile view")))
+        .alert(NSLocalizedString("Turn Off Calculation?", comment: "Title of the confirmation to disable the therapy optimizer"), isPresented: $showDisableConfirmation) {
+            Button(NSLocalizedString("Turn Off", comment: "Confirm disabling the therapy optimizer"), role: .destructive) {
+                optimizer.disable()
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel disabling the therapy optimizer"), role: .cancel) {}
+        } message: {
+            Text(NSLocalizedString("All calculated values and the collected history are deleted.", comment: "Message of the confirmation to disable the therapy optimizer"))
+        }
+        .sheet(isPresented: $showCreateSheet) {
+            if let state = optimizer.state {
+                CreateCalculatedProfileSheet(state: state, profiles: profiles)
+            }
+        }
+    }
+
+    private func statusSection(_ state: TherapyOptimizerState) -> some View {
+        Section {
+            Picker(NSLocalizedString("Window", comment: "Picker for the therapy optimizer window length"), selection: Binding(
+                get: { state.windowDays },
+                set: { optimizer.setWindowDays($0) }
+            )) {
+                ForEach(TherapyOptimizerState.windowOptions, id: \.self) { days in
+                    Text(String(format: NSLocalizedString("%d days", comment: "Therapy optimizer window option (1: number of days)"), days)).tag(days)
+                }
+            }
+            valueRow(NSLocalizedString("Days of data", comment: "Number of days with collected therapy optimizer data"), "\(state.summaries.count)")
+            valueRow(NSLocalizedString("Last update", comment: "Date of the last therapy optimizer daily update"), state.lastDailyUpdate.map { Self.dateFormatter.string(from: $0) } ?? "–")
+            valueRow(NSLocalizedString("Processed until", comment: "Date up to which data was processed by the therapy optimizer"), Self.dateFormatter.string(from: state.lastProcessedDate))
+
+            Button(NSLocalizedString("Create Profile from Calculated", comment: "Button that opens the sheet to create a therapy profile from calculated values")) {
+                showCreateSheet = true
+            }
+            Button(NSLocalizedString("Recalculate", comment: "Button that recalculates the therapy optimizer from history")) {
+                optimizer.recalculate()
+            }
+            .disabled(optimizer.isProcessing)
+            Button(NSLocalizedString("Restart from Current Settings", comment: "Button that resets the therapy optimizer start values to the current settings")) {
+                optimizer.restartFromCurrentSettings()
+            }
+            .disabled(optimizer.isProcessing)
+        }
+    }
+
+    private func basalSection(_ state: TherapyOptimizerState) -> some View {
+        Section(header: header(NSLocalizedString("Basal Rates (U/hr)", comment: "Header of the calculated basal rates table"))) {
+            ForEach(0..<24, id: \.self) { hour in
+                valuesRow(hourLabel(hour), start: state.basal.start[hour], calculated: state.basal.calculated[hour], dataDays: state.basal.dataDays[hour], format: "%.2f")
+            }
+        }
+    }
+
+    private func sensitivitySection(_ state: TherapyOptimizerState) -> some View {
+        let unit = state.sensitivityUnit == .milligramsPerDeciliter ? "mg/dL" : "mmol/L"
+        let format = state.sensitivityUnit == .milligramsPerDeciliter ? "%.0f" : "%.1f"
+        return Section(header: header(String(format: NSLocalizedString("Insulin Sensitivities (%@/U)", comment: "Header of the calculated insulin sensitivities table (1: glucose unit)"), unit))) {
+            valuesRow(allDayLabel, start: state.displaySensitivity(state.sensitivity.startAllDay), calculated: state.displaySensitivity(state.sensitivity.calculatedAllDay), dataDays: state.sensitivity.dataDaysAllDay, format: format)
+            ForEach(0..<24, id: \.self) { hour in
+                valuesRow(hourLabel(hour), start: state.displaySensitivity(state.sensitivity.start[hour]), calculated: state.displaySensitivity(state.sensitivity.calculated[hour]), dataDays: state.sensitivity.dataDays[hour], format: format)
+            }
+        }
+    }
+
+    private func carbRatioSection(_ state: TherapyOptimizerState) -> some View {
+        Section(header: header(NSLocalizedString("Carb Ratios (g/U)", comment: "Header of the calculated carb ratios table"))) {
+            valuesRow(allDayLabel, start: state.carbRatio.startAllDay, calculated: state.carbRatio.calculatedAllDay, dataDays: state.carbRatio.dataDaysAllDay, format: "%.1f")
+            ForEach(0..<24, id: \.self) { hour in
+                valuesRow(hourLabel(hour), start: state.carbRatio.start[hour], calculated: state.carbRatio.calculated[hour], dataDays: state.carbRatio.dataDays[hour], format: "%.1f")
+            }
+        }
+    }
+
+    private var allDayLabel: String {
+        NSLocalizedString("All day", comment: "Row label for the all-day calculated value")
+    }
+
+    private func header(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(NSLocalizedString("Start · Calculated · Change · Days", comment: "Column legend of the calculated therapy tables"))
+                .font(.caption2)
+        }
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        String(format: "%02d:00", hour)
+    }
+
+    private func valueRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value).foregroundColor(.secondary)
+        }
+    }
+
+    private func valuesRow(_ title: String, start: Double, calculated: Double, dataDays: Int, format: String) -> some View {
+        let change = start != 0 ? (calculated / start - 1) * 100 : 0
+        return HStack {
+            Text(title)
+                .frame(width: 64, alignment: .leading)
+            Spacer()
+            Text(String(format: format, start))
+                .foregroundColor(.secondary)
+            Text(String(format: format, calculated))
+                .bold()
+                .frame(minWidth: 48, alignment: .trailing)
+            Text(String(format: "%+.0f%%", change))
+                .foregroundColor(.secondary)
+                .frame(minWidth: 44, alignment: .trailing)
+            Text("\(dataDays)")
+                .foregroundColor(.secondary)
+                .frame(minWidth: 24, alignment: .trailing)
+        }
+        .font(.footnote.monospacedDigit())
+        .opacity(dataDays >= TherapyOptimizerEngine.reliableHourDataDays ? 1 : 0.5)
+    }
+}
+
+private struct CreateCalculatedProfileSheet: View {
+    let state: TherapyOptimizerState
+    @ObservedObject var profiles: TherapyProfilesModel
+    @Environment(\.presentationMode) private var presentationMode
+
+    @State private var name = String(format: NSLocalizedString("Calculated %@", comment: "Default name of a profile created from calculated values (1: date)"), DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none))
+    @State private var includeBasal = true
+    @State private var includeSensitivity = true
+    @State private var includeCarbRatio = true
+    @State private var hourlySensitivity = false
+    @State private var hourlyCarbRatio = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
+                    TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
+                }
+                Section(footer: Text(NSLocalizedString("Parts that are not taken are copied from your current therapy settings.", comment: "Footer of the create-from-calculated sheet"))) {
+                    Toggle(NSLocalizedString("Basal Rates", comment: "Therapy profile basal rates row"), isOn: $includeBasal)
+                    Toggle(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"), isOn: $includeSensitivity)
+                    if includeSensitivity {
+                        modePicker(selection: $hourlySensitivity)
+                    }
+                    Toggle(NSLocalizedString("Carb Ratios", comment: "Therapy profile carb ratios row"), isOn: $includeCarbRatio)
+                    if includeCarbRatio {
+                        modePicker(selection: $hourlyCarbRatio)
+                    }
+                }
+                if let errorMessage = errorMessage {
+                    Section {
+                        Text(errorMessage).foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle(Text(NSLocalizedString("New Profile", comment: "Title of the create-from-calculated sheet")))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(NSLocalizedString("Cancel", comment: "Cancel creating a profile from calculated values")) {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(NSLocalizedString("Create", comment: "Create a profile from calculated values"), action: create)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func modePicker(selection: Binding<Bool>) -> some View {
+        Picker("", selection: selection) {
+            Text(NSLocalizedString("All-day value", comment: "Use the single all-day calculated value")).tag(false)
+            Text(NSLocalizedString("Hourly", comment: "Use the hourly calculated values")).tag(true)
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private func create() {
+        let live = profiles.liveViewModel.therapySettings
+        let basal = includeBasal
+            ? state.calculatedBasalSchedule(maximumBasalRate: live.maximumBasalRatePerHour, maximumEntryCount: profiles.liveViewModel.maximumBasalScheduleEntryCount)
+            : live.basalRateSchedule
+        let sensitivity = includeSensitivity ? state.calculatedSensitivitySchedule(hourly: hourlySensitivity) : live.insulinSensitivitySchedule
+        let carbRatio = includeCarbRatio ? state.calculatedCarbRatioSchedule(hourly: hourlyCarbRatio) : live.carbRatioSchedule
+
+        guard let basal = basal, let sensitivity = sensitivity, let carbRatio = carbRatio else {
+            errorMessage = NSLocalizedString("The profile could not be created.", comment: "Error when a profile cannot be created from calculated values")
+            return
+        }
+        profiles.addProfile(name: name, basalRateSchedule: basal, carbRatioSchedule: carbRatio, insulinSensitivitySchedule: sensitivity)
+        presentationMode.wrappedValue.dismiss()
+    }
+}

@@ -6,6 +6,7 @@
 //  Copyright © 2020 LoopKit Authors. All rights reserved.
 //
 
+import Combine
 import LoopKit
 import LoopKitUI
 import LoopCore
@@ -304,15 +305,14 @@ extension SettingsView {
     }
 
     private var therapySettingsView: some View {
-        TherapySettingsView(
-            mode: .settings,
-            viewModel: TherapySettingsViewModel(
+        TherapySettingsScreen(makeViewModel: {
+            TherapySettingsViewModel(
                 therapySettings: viewModel.therapySettings(),
                 sensitivityOverridesEnabled: FeatureFlags.sensitivityOverridesEnabled,
                 adultChildInsulinModelSelectionEnabled: FeatureFlags.adultChildInsulinModelSelectionEnabled,
                 delegate: viewModel.therapySettingsViewModelDelegate
             )
-        )
+        })
         .environmentObject(displayGlucosePreference)
         .environment(\.dismissAction, self.dismiss)
         .environment(\.appName, self.appName)
@@ -1025,6 +1025,352 @@ struct LogView: View {
         case .notice: return .primary
         case .error: return .orange
         case .fault: return .red
+        }
+    }
+}
+
+// MARK: - Therapy profiles
+
+/// Owns the Therapy Settings view model for one visit of the screen, so the profiles screen and the
+/// Therapy Settings screen share (and stay in sync through) the same instance.
+private struct TherapySettingsScreen: View {
+    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
+    @StateObject private var therapySettingsViewModel: TherapySettingsViewModel
+
+    init(makeViewModel: @escaping () -> TherapySettingsViewModel) {
+        _therapySettingsViewModel = StateObject(wrappedValue: makeViewModel())
+    }
+
+    var body: some View {
+        TherapySettingsView(mode: .settings, viewModel: therapySettingsViewModel)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink(destination: TherapyProfilesView(liveViewModel: therapySettingsViewModel)
+                                    .environmentObject(displayGlucosePreference)) {
+                        Text(NSLocalizedString("Profiles", comment: "Button in Therapy Settings that opens the therapy profiles list"))
+                    }
+                }
+            }
+    }
+}
+
+enum TherapyProfileError: LocalizedError {
+    case basalRateAboveMaximum(Double)
+    case invalidSchedule
+
+    var errorDescription: String? {
+        switch self {
+        case .basalRateAboveMaximum(let maximum):
+            return String(format: NSLocalizedString("This profile contains a basal rate above your maximum basal rate of %.2f U/hr. Edit the profile or raise the maximum basal rate first.", comment: "Error when activating a therapy profile whose basal rates exceed the maximum basal rate (1: maximum basal rate)"), maximum)
+        case .invalidSchedule:
+            return NSLocalizedString("The schedule is invalid.", comment: "Error when a therapy profile schedule cannot be created")
+        }
+    }
+}
+
+final class TherapyProfilesModel: ObservableObject {
+    @Published private(set) var profiles = UserDefaults.standard.therapyProfiles
+    let liveViewModel: TherapySettingsViewModel
+    private var liveSettingsCancellable: AnyCancellable?
+
+    init(liveViewModel: TherapySettingsViewModel) {
+        self.liveViewModel = liveViewModel
+        // The active marker depends on the live therapy settings.
+        liveSettingsCancellable = liveViewModel.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
+    func profile(withID id: UUID) -> TherapyProfile? {
+        profiles.first { $0.id == id }
+    }
+
+    func isActive(_ profile: TherapyProfile) -> Bool {
+        let live = liveViewModel.therapySettings
+        return live.basalRateSchedule == profile.basalRateSchedule
+            && live.carbRatioSchedule == profile.carbRatioSchedule
+            && live.insulinSensitivitySchedule == profile.insulinSensitivitySchedule
+    }
+
+    func addProfileFromCurrentSettings() -> TherapyProfile? {
+        let live = liveViewModel.therapySettings
+        guard let basalRates = live.basalRateSchedule,
+              let carbRatios = live.carbRatioSchedule,
+              let sensitivities = live.insulinSensitivitySchedule else {
+            return nil
+        }
+        let profile = TherapyProfile(
+            name: String(format: NSLocalizedString("Profile %d", comment: "Default name of a new therapy profile (1: profile number)"), profiles.count + 1),
+            basalRateSchedule: basalRates,
+            carbRatioSchedule: carbRatios,
+            insulinSensitivitySchedule: sensitivities
+        )
+        persist(profiles + [profile])
+        return profile
+    }
+
+    func addProfile(name: String, basalRateSchedule: BasalRateSchedule, carbRatioSchedule: CarbRatioSchedule, insulinSensitivitySchedule: InsulinSensitivitySchedule) {
+        persist(profiles + [TherapyProfile(
+            name: name,
+            basalRateSchedule: basalRateSchedule,
+            carbRatioSchedule: carbRatioSchedule,
+            insulinSensitivitySchedule: insulinSensitivitySchedule
+        )])
+    }
+
+    func save(_ profile: TherapyProfile) {
+        persist(profiles.map { $0.id == profile.id ? profile : $0 })
+    }
+
+    func delete(atOffsets offsets: IndexSet) {
+        var updated = profiles
+        updated.remove(atOffsets: offsets)
+        persist(updated)
+    }
+
+    /// Sends the profile's basal rates to the pump, then makes all three schedules the live therapy settings.
+    func activate(_ profile: TherapyProfile, completion: @escaping (Error?) -> Void) {
+        if let maximum = liveViewModel.therapySettings.maximumBasalRatePerHour,
+           profile.basalRateSchedule.items.contains(where: { $0.value > maximum }) {
+            completion(TherapyProfileError.basalRateAboveMaximum(maximum))
+            return
+        }
+        liveViewModel.syncBasalRateSchedule(items: profile.basalRateSchedule.items) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let syncedSchedule):
+                    var activated = profile
+                    activated.basalRateSchedule = syncedSchedule
+                    self.save(activated)
+                    self.apply(activated)
+                    completion(nil)
+                case .failure(let error):
+                    completion(error)
+                }
+            }
+        }
+    }
+
+    /// Writes the profile into the live therapy settings without talking to the pump.
+    func apply(_ profile: TherapyProfile) {
+        liveViewModel.therapySettings.carbRatioSchedule = profile.carbRatioSchedule
+        liveViewModel.therapySettings.insulinSensitivitySchedule = profile.insulinSensitivitySchedule
+        liveViewModel.saveBasalRates(basalRates: profile.basalRateSchedule)
+    }
+
+    private func persist(_ updated: [TherapyProfile]) {
+        profiles = updated
+        UserDefaults.standard.therapyProfiles = updated
+    }
+}
+
+/// Backs the stock LoopKitUI schedule editors with a profile instead of the live therapy settings.
+/// Edits to the active profile are also applied live (basal rates are synced to the pump first).
+final class TherapyProfileEditorModel: ObservableObject, TherapySettingsViewModelDelegate {
+    let profileID: UUID
+    private let profiles: TherapyProfilesModel
+    private(set) lazy var viewModel: TherapySettingsViewModel = TherapySettingsViewModel(therapySettings: profiles.liveViewModel.therapySettings, delegate: self)
+
+    init(profileID: UUID, profiles: TherapyProfilesModel) {
+        self.profileID = profileID
+        self.profiles = profiles
+        reload()
+    }
+
+    func reload() {
+        guard let profile = profiles.profile(withID: profileID) else { return }
+        var settings = profiles.liveViewModel.therapySettings
+        settings.basalRateSchedule = profile.basalRateSchedule
+        settings.carbRatioSchedule = profile.carbRatioSchedule
+        settings.insulinSensitivitySchedule = profile.insulinSensitivitySchedule
+        viewModel.therapySettings = settings
+    }
+
+    func syncBasalRateSchedule(items: [RepeatingScheduleValue<Double>], completion: @escaping (Swift.Result<BasalRateSchedule, Error>) -> Void) {
+        if let profile = profiles.profile(withID: profileID), profiles.isActive(profile) {
+            profiles.liveViewModel.syncBasalRateSchedule(items: items, completion: completion)
+        } else if let schedule = BasalRateSchedule(dailyItems: items, timeZone: viewModel.therapySettings.basalRateSchedule?.timeZone) {
+            completion(.success(schedule))
+        } else {
+            completion(.failure(TherapyProfileError.invalidSchedule))
+        }
+    }
+
+    func syncDeliveryLimits(deliveryLimits: DeliveryLimits, completion: @escaping (Swift.Result<DeliveryLimits, Error>) -> Void) {
+        completion(.success(deliveryLimits))
+    }
+
+    func saveCompletion(therapySettings: TherapySettings) {
+        guard var profile = profiles.profile(withID: profileID),
+              let basalRates = therapySettings.basalRateSchedule,
+              let carbRatios = therapySettings.carbRatioSchedule,
+              let sensitivities = therapySettings.insulinSensitivitySchedule else {
+            return
+        }
+        let wasActive = profiles.isActive(profile)
+        profile.basalRateSchedule = basalRates
+        profile.carbRatioSchedule = carbRatios
+        profile.insulinSensitivitySchedule = sensitivities
+        profiles.save(profile)
+        if wasActive {
+            profiles.apply(profile)
+        }
+    }
+
+    func pumpSupportedIncrements() -> PumpSupportedIncrements? {
+        profiles.liveViewModel.pumpSupportedIncrements()
+    }
+}
+
+struct TherapyProfilesView: View {
+    @StateObject private var model: TherapyProfilesModel
+    @State private var selectedProfileID: UUID?
+
+    init(liveViewModel: TherapySettingsViewModel) {
+        _model = StateObject(wrappedValue: TherapyProfilesModel(liveViewModel: liveViewModel))
+    }
+
+    var body: some View {
+        List {
+            Section(footer: Text(NSLocalizedString("A profile is a set of basal rates, carb ratios and insulin sensitivities. Activating a profile sends its basal rates to the pump and makes it your current therapy settings.", comment: "Footer of the therapy profiles list"))) {
+                ForEach(model.profiles) { profile in
+                    NavigationLink(destination: TherapyProfileDetailView(profileID: profile.id, profiles: model),
+                                   tag: profile.id,
+                                   selection: $selectedProfileID) {
+                        HStack {
+                            Text(profile.name)
+                            Spacer()
+                            if model.isActive(profile) {
+                                Text(NSLocalizedString("Active", comment: "Marker for the therapy profile matching the current therapy settings"))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+                .onDelete(perform: model.delete(atOffsets:))
+            }
+
+            Section {
+                Button(NSLocalizedString("New Profile from Current Settings", comment: "Button that creates a therapy profile from the current therapy settings")) {
+                    selectedProfileID = model.addProfileFromCurrentSettings()?.id
+                }
+            }
+
+            Section(header: Text(NSLocalizedString("Calculated", comment: "Header of the calculated therapy profile section"))) {
+                NavigationLink(destination: CalculatedProfileView(profiles: model)) {
+                    Text(NSLocalizedString("Calculated Profile", comment: "Row that opens the calculated therapy profile"))
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(Text(NSLocalizedString("Profiles", comment: "Title of the therapy profiles list")))
+    }
+}
+
+struct TherapyProfileDetailView: View {
+    private enum Editor: Hashable {
+        case basalRates
+        case carbRatios
+        case insulinSensitivities
+    }
+
+    @ObservedObject var profiles: TherapyProfilesModel
+    @StateObject private var editor: TherapyProfileEditorModel
+    @State private var name: String
+    @State private var activeEditor: Editor?
+    @State private var showActivateConfirmation = false
+    @State private var isActivating = false
+    @State private var activationErrorMessage: String?
+
+    init(profileID: UUID, profiles: TherapyProfilesModel) {
+        self.profiles = profiles
+        _editor = StateObject(wrappedValue: TherapyProfileEditorModel(profileID: profileID, profiles: profiles))
+        _name = State(initialValue: profiles.profile(withID: profileID)?.name ?? "")
+    }
+
+    private var profile: TherapyProfile? {
+        profiles.profile(withID: editor.profileID)
+    }
+
+    var body: some View {
+        List {
+            Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
+                TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
+            }
+
+            Section {
+                NavigationLink(destination: BasalRateScheduleEditor(mode: .settings, therapySettingsViewModel: editor.viewModel, didSave: closeEditor),
+                               tag: Editor.basalRates,
+                               selection: $activeEditor) {
+                    Text(NSLocalizedString("Basal Rates", comment: "Therapy profile basal rates row"))
+                }
+                NavigationLink(destination: CarbRatioScheduleEditor(mode: .settings, therapySettingsViewModel: editor.viewModel, didSave: closeEditor),
+                               tag: Editor.carbRatios,
+                               selection: $activeEditor) {
+                    Text(NSLocalizedString("Carb Ratios", comment: "Therapy profile carb ratios row"))
+                }
+                NavigationLink(destination: InsulinSensitivityScheduleEditor(mode: .settings, therapySettingsViewModel: editor.viewModel, didSave: closeEditor),
+                               tag: Editor.insulinSensitivities,
+                               selection: $activeEditor) {
+                    Text(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"))
+                }
+            }
+
+            Section(footer: Text(NSLocalizedString("Changes to the active profile are applied immediately; basal rate changes are sent to the pump.", comment: "Footer of the therapy profile activation section"))) {
+                if let profile = profile, profiles.isActive(profile) {
+                    Label(NSLocalizedString("Active Profile", comment: "Shown when the therapy profile matches the current therapy settings"), systemImage: "checkmark.circle.fill")
+                } else {
+                    Button {
+                        showActivateConfirmation = true
+                    } label: {
+                        HStack {
+                            Text(NSLocalizedString("Activate Profile", comment: "Button that activates a therapy profile"))
+                            if isActivating {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(isActivating || profile == nil)
+                    .alert(NSLocalizedString("Activate Profile?", comment: "Title of the therapy profile activation confirmation"), isPresented: $showActivateConfirmation) {
+                        Button(NSLocalizedString("Activate", comment: "Confirm therapy profile activation"), action: activate)
+                        Button(NSLocalizedString("Cancel", comment: "Cancel therapy profile activation"), role: .cancel) {}
+                    } message: {
+                        Text(NSLocalizedString("The basal rates of this profile are sent to the pump now. Carb ratios and insulin sensitivities take effect immediately.", comment: "Message of the therapy profile activation confirmation"))
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(Text(name))
+        .onChange(of: name) { newName in
+            guard var profile = profile else { return }
+            profile.name = newName
+            profiles.save(profile)
+        }
+        .alert(NSLocalizedString("Activation Failed", comment: "Title of the therapy profile activation error"), isPresented: Binding(
+            get: { activationErrorMessage != nil },
+            set: { if !$0 { activationErrorMessage = nil } }
+        )) {
+            Button(NSLocalizedString("OK", comment: "Dismiss the therapy profile activation error"), role: .cancel) {}
+        } message: {
+            Text(activationErrorMessage ?? "")
+        }
+    }
+
+    private func closeEditor() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            activeEditor = nil
+        }
+    }
+
+    private func activate() {
+        guard let profile = profile else { return }
+        isActivating = true
+        profiles.activate(profile) { error in
+            editor.reload()
+            isActivating = false
+            activationErrorMessage = error?.localizedDescription
         }
     }
 }

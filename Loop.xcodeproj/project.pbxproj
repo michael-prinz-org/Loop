@@ -153,6 +153,10 @@
 		43A51E1F1EB6D62A000736CC /* CarbAbsorptionViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A51E1E1EB6D62A000736CC /* CarbAbsorptionViewController.swift */; };
 		43A51E211EB6DBDD000736CC /* LoopChartsTableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A51E201EB6DBDD000736CC /* LoopChartsTableViewController.swift */; };
 		43A567691C94880B00334FAC /* LoopDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A567681C94880B00334FAC /* LoopDataManager.swift */; };
+		7E0D7A0229A1C0DE00000001 /* TherapyOptimizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000001 /* TherapyOptimizer.swift */; };
+		7E0D7A0229A1C0DE00000002 /* TherapyOptimizerDataCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000002 /* TherapyOptimizerDataCollector.swift */; };
+		7E0D7A0229A1C0DE00000003 /* CalculatedProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000003 /* CalculatedProfileView.swift */; };
+		7E0D7A0229A1C0DE00000004 /* TherapyOptimizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000004 /* TherapyOptimizerTests.swift */; };
 		43A943761B926B7B0051FA24 /* Interface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 43A943741B926B7B0051FA24 /* Interface.storyboard */; };
 		43A9437F1B926B7B0051FA24 /* WatchApp Extension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 43A9437E1B926B7B0051FA24 /* WatchApp Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		43A943881B926B7B0051FA24 /* ExtensionDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A943871B926B7B0051FA24 /* ExtensionDelegate.swift */; };
@@ -894,6 +898,10 @@
 		43A51E1E1EB6D62A000736CC /* CarbAbsorptionViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = CarbAbsorptionViewController.swift; sourceTree = "<group>"; };
 		43A51E201EB6DBDD000736CC /* LoopChartsTableViewController.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = LoopChartsTableViewController.swift; sourceTree = "<group>"; };
 		43A567681C94880B00334FAC /* LoopDataManager.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; lineEnding = 0; path = LoopDataManager.swift; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.swift; };
+		7E0D7A0129A1C0DE00000001 /* TherapyOptimizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TherapyOptimizer.swift; sourceTree = "<group>"; };
+		7E0D7A0129A1C0DE00000002 /* TherapyOptimizerDataCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TherapyOptimizerDataCollector.swift; sourceTree = "<group>"; };
+		7E0D7A0129A1C0DE00000003 /* CalculatedProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalculatedProfileView.swift; sourceTree = "<group>"; };
+		7E0D7A0129A1C0DE00000004 /* TherapyOptimizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TherapyOptimizerTests.swift; sourceTree = "<group>"; };
 		43A8EC6E210E622600A81379 /* CGMBLEKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CGMBLEKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		43A943721B926B7B0051FA24 /* WatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		43A943751B926B7B0051FA24 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Interface.storyboard; sourceTree = "<group>"; };
@@ -1566,6 +1574,7 @@
 				A91E4C2224F86F1000BE9213 /* CriticalEventLogExportManagerTests.swift */,
 				C16B983F26B4898800256B05 /* DoseEnactorTests.swift */,
 				E9C58A7124DB489100487A17 /* LoopDataManagerTests.swift */,
+				7E0D7A0129A1C0DE00000004 /* TherapyOptimizerTests.swift */,
 				E950CA9029002D9000B5B692 /* LoopDataManagerDosingTests.swift */,
 				E9B3552C293592B40076AB04 /* MealDetectionManagerTests.swift */,
 				1D70C40026EC0F9D00C62570 /* SupportManagerTests.swift */,
@@ -1994,6 +2003,7 @@
 				438D42FA1D7D11A4003244B0 /* PredictionInputEffectTableViewCell.swift */,
 				439706E522D2E84900C81566 /* PredictionSettingTableViewCell.swift */,
 				1DE09BA824A3E23F009EE9F9 /* SettingsView.swift */,
+				7E0D7A0129A1C0DE00000003 /* CalculatedProfileView.swift */,
 				DDC389FB2A2BC6670066E2E8 /* SettingsView+algorithmExperimentsSection.swift */,
 				C1DE5D22251BFC4D00439E49 /* SimpleBolusView.swift */,
 				43F64DD81D9C92C900D24DC6 /* TitleSubtitleTableViewCell.swift */,
@@ -2022,6 +2032,8 @@
 				A9C62D862331703000535612 /* LoggingServicesManager.swift */,
 				A9D5C5B525DC6C6A00534873 /* LoopAppManager.swift */,
 				43A567681C94880B00334FAC /* LoopDataManager.swift */,
+				7E0D7A0129A1C0DE00000001 /* TherapyOptimizer.swift */,
+				7E0D7A0129A1C0DE00000002 /* TherapyOptimizerDataCollector.swift */,
 				43C094491CACCC73001F6403 /* NotificationManager.swift */,
 				A97F250725E056D500F0EE19 /* OnboardingManager.swift */,
 				432E73CA1D24B3D6009AD15D /* RemoteDataServicesManager.swift */,
@@ -3430,6 +3442,9 @@
 				4F11D3C020DCBEEC006E072C /* GlucoseBackfillRequestUserInfo.swift in Sources */,
 				89E267FC2292456700A3F2AF /* FeatureFlags.swift in Sources */,
 				43A567691C94880B00334FAC /* LoopDataManager.swift in Sources */,
+				7E0D7A0229A1C0DE00000001 /* TherapyOptimizer.swift in Sources */,
+				7E0D7A0229A1C0DE00000002 /* TherapyOptimizerDataCollector.swift in Sources */,
+				7E0D7A0229A1C0DE00000003 /* CalculatedProfileView.swift in Sources */,
 				1DA649A9244126DA00F61E75 /* InAppModalAlertScheduler.swift in Sources */,
 				43B260491ED248FB008CAA77 /* CarbEntryTableViewCell.swift in Sources */,
 				142CB75B2A60BFC30075748A /* FavoriteFoodsView.swift in Sources */,
@@ -3756,6 +3771,7 @@
 				1DA7A84224476EAD008257F0 /* AlertManagerTests.swift in Sources */,
 				A91E4C2324F86F1000BE9213 /* CriticalEventLogExportManagerTests.swift in Sources */,
 				E9C58A7324DB4A2700487A17 /* LoopDataManagerTests.swift in Sources */,
+				7E0D7A0229A1C0DE00000004 /* TherapyOptimizerTests.swift in Sources */,
 				E98A55F324EDD9530008715D /* MockSettingsStore.swift in Sources */,
 				C165756F2534C468004AE16E /* SimpleBolusViewModelTests.swift in Sources */,
 				A96DAC2A2838EF8A00D94E38 /* DiagnosticLogTests.swift in Sources */,
