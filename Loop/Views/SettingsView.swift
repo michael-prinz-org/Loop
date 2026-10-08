@@ -208,20 +208,12 @@ extension SettingsView {
         )
 
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Pod communication interval", comment: "The label for the pod communication interval picker")
-                Spacer()
-                Text(String(format: NSLocalizedString("%d min", comment: "Custom loop interval value in minutes (1: number of minutes)"), Int(viewModel.customLoopIntervalMinutes.rounded())))
-                    .foregroundColor(.secondary)
-            }
-            Picker("", selection: $viewModel.customLoopIntervalMinutes) {
-                ForEach(Int(viewModel.minimumCustomLoopIntervalMinutes)...Int(viewModel.maximumCustomLoopIntervalMinutes), id: \.self) { minute in
-                    Text(String(format: NSLocalizedString("%d min", comment: "Custom loop interval value in minutes (1: number of minutes)"), minute))
-                        .tag(Double(minute))
-                }
-            }
-            .pickerStyle(.wheel)
-            .labelsHidden()
+            ExpandableWheelPicker(
+                title: Text("Pod communication interval", comment: "The label for the pod communication interval picker"),
+                selection: $viewModel.customLoopIntervalMinutes,
+                options: (Int(viewModel.minimumCustomLoopIntervalMinutes)...Int(viewModel.maximumCustomLoopIntervalMinutes)).map { Double($0) },
+                label: { String(format: NSLocalizedString("%d min", comment: "Custom loop interval value in minutes (1: number of minutes)"), Int($0.rounded())) }
+            )
 
             if viewModel.customLoopIntervalExceedsRecencyLimit {
                 DescriptiveText(label: NSLocalizedString("Above 13 minutes the pod is contacted less often than pump data stays fresh, so a status refresh is performed right before a dose and insulin adjustments can lag up to the communication interval.", comment: "Warning shown when the pod communication interval exceeds the pump data recency limit"))
@@ -305,12 +297,16 @@ extension SettingsView {
     }
 
     private var therapySettingsView: some View {
-        TherapySettingsScreen(makeViewModel: {
-            TherapySettingsViewModel(
-                therapySettings: viewModel.therapySettings(),
+        TherapySettingsScreen(glucoseDisplayRange: $viewModel.glucoseDisplayRange, makeBridge: {
+            StandardTherapySettingsBridge(
+                liveViewModel: TherapySettingsViewModel(
+                    therapySettings: viewModel.therapySettings(),
+                    sensitivityOverridesEnabled: FeatureFlags.sensitivityOverridesEnabled,
+                    adultChildInsulinModelSelectionEnabled: FeatureFlags.adultChildInsulinModelSelectionEnabled,
+                    delegate: viewModel.therapySettingsViewModelDelegate
+                ),
                 sensitivityOverridesEnabled: FeatureFlags.sensitivityOverridesEnabled,
-                adultChildInsulinModelSelectionEnabled: FeatureFlags.adultChildInsulinModelSelectionEnabled,
-                delegate: viewModel.therapySettingsViewModelDelegate
+                adultChildInsulinModelSelectionEnabled: FeatureFlags.adultChildInsulinModelSelectionEnabled
             )
         })
         .environmentObject(displayGlucosePreference)
@@ -333,13 +329,6 @@ extension SettingsView {
                             descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
             }
 
-            NavigationLink(destination: glucoseDisplayRangeView) {
-                VStack(alignment: .leading) {
-                    Text(NSLocalizedString("Glucose Range", comment: "Title text for the glucose range editor"))
-                    DescriptiveText(label: NSLocalizedString("General glucose limits", comment: "Descriptive text for the glucose display range editor"))
-                }
-            }
-
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
                 item.view
             }
@@ -356,11 +345,6 @@ extension SettingsView {
                 PluginMenuItem(section: item.section, view: item.view, pluginIdentifier: plugin.pluginIdentifier, offset: index)
             }
         }
-    }
-
-    private var glucoseDisplayRangeView: some View {
-        GlucoseDisplayRangeEditorView(range: $viewModel.glucoseDisplayRange)
-            .environmentObject(displayGlucosePreference)
     }
 
     private var deviceSettingsSection: some View {
@@ -692,52 +676,118 @@ fileprivate struct LargeButton<Content: View, SecondaryContent: View>: View {
     }
 }
 
-struct GlucoseDisplayRangeEditorView: View {
+/// Shows a title and the current value; tapping the row opens an inline wheel to change it.
+struct ExpandableWheelPicker<Value: Hashable>: View {
+    let title: Text
+    @Binding var selection: Value
+    let options: [Value]
+    let label: (Value) -> String
+
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    title
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Text(label(selection))
+                        .foregroundColor(isExpanded ? .accentColor : .secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded && isEnabled {
+                Picker("", selection: $selection) {
+                    ForEach(options, id: \.self) { option in
+                        Text(label(option)).tag(option)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .labelsHidden()
+            }
+        }
+        .onChange(of: isEnabled) { enabled in
+            if !enabled {
+                isExpanded = false
+            }
+        }
+    }
+}
+
+/// Glucose display thresholds, shown as a card at the end of Therapy Settings.
+struct GlucoseRangeCard: View {
     @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
 
     @Binding var range: GlucoseDisplayRange
 
     var body: some View {
-        List {
-            Section(footer: DescriptiveText(label: NSLocalizedString("These thresholds define the general glucose limits used by Loop to classify glucose values.", comment: "Descriptive text for general glucose range"))) {
-                row("Urgent Low", value: $range.urgentLow)
-                row("Low", value: $range.low)
-                row("High", value: $range.high)
-                row("Urgent High", value: $range.urgentHigh)
-            }
+        let bounds = LoopSettings.glucoseDisplayRangeBounds
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(NSLocalizedString("Glucose Range", comment: "Title text for the glucose range editor"))
+                .font(.headline)
+            DescriptiveText(label: NSLocalizedString("These thresholds define the general glucose limits used by Loop to classify glucose values.", comment: "Descriptive text for general glucose range"))
+            Divider()
+            row(NSLocalizedString("Urgent Low", comment: "Glucose display range threshold label"), keyPath: \.urgentLow, from: bounds.lowerBound, through: range.low - step)
+            Divider()
+            row(NSLocalizedString("Low", comment: "Glucose display range threshold label"), keyPath: \.low, from: range.urgentLow + step, through: range.high - step)
+            Divider()
+            row(NSLocalizedString("High", comment: "Glucose display range threshold label"), keyPath: \.high, from: range.low + step, through: range.urgentHigh - step)
+            Divider()
+            row(NSLocalizedString("Urgent High", comment: "Glucose display range threshold label"), keyPath: \.urgentHigh, from: range.high + step, through: bounds.upperBound)
         }
-        .insetGroupedListStyle()
-        .navigationBarTitle(Text(NSLocalizedString("Glucose Range", comment: "Title text for the glucose range editor")))
     }
 
+    /// One display step (1 mg/dL or 0.1 mmol/L) in mg/dL.
     private var step: Double {
         displayGlucosePreference.unit == .millimolesPerLiter
             ? HKQuantity(unit: .millimolesPerLiter, doubleValue: 0.1).doubleValue(for: .milligramsPerDeciliter)
             : 1
     }
 
-    private func row(_ label: String, value: Binding<Double>) -> some View {
-        Stepper(value: stepperBinding(for: value), step: step) {
-            HStack {
-                Text(NSLocalizedString(label, comment: "Glucose display range threshold label"))
-                Spacer()
-                Text(displayGlucosePreference.format(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: value.wrappedValue)))
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private func stepperBinding(for value: Binding<Double>) -> Binding<Double> {
-        Binding(
-            get: { value.wrappedValue },
+    private func row(_ title: String, keyPath: WritableKeyPath<GlucoseDisplayRange, Double>, from lower: Double, through upper: Double) -> some View {
+        let options = values(from: lower, through: upper, current: range[keyPath: keyPath])
+        let selection = Binding<Double>(
+            get: {
+                let current = range[keyPath: keyPath]
+                return options.min { abs($0 - current) < abs($1 - current) } ?? current
+            },
             set: { newValue in
-                value.wrappedValue = newValue
-                range = GlucoseDisplayRange(urgentLow: range.urgentLow,
-                                            low: range.low,
-                                            high: range.high,
-                                            urgentHigh: range.urgentHigh)
+                var updated = range
+                updated[keyPath: keyPath] = newValue
+                range = GlucoseDisplayRange(urgentLow: updated.urgentLow,
+                                            low: updated.low,
+                                            high: updated.high,
+                                            urgentHigh: updated.urgentHigh)
             }
         )
+        return ExpandableWheelPicker(
+            title: Text(title),
+            selection: selection,
+            options: options,
+            label: { displayGlucosePreference.format(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: $0)) }
+        )
+    }
+
+    /// Values on the display unit's grid between `lower` and `upper`, in mg/dL.
+    private func values(from lower: Double, through upper: Double, current: Double) -> [Double] {
+        let unit = displayGlucosePreference.unit
+        let stepsPerUnit = unit == .millimolesPerLiter ? 10.0 : 1.0
+        let first = (HKQuantity(unit: .milligramsPerDeciliter, doubleValue: lower).doubleValue(for: unit) * stepsPerUnit).rounded(.up)
+        let last = (HKQuantity(unit: .milligramsPerDeciliter, doubleValue: upper).doubleValue(for: unit) * stepsPerUnit).rounded(.down)
+        guard first <= last else {
+            return [current]
+        }
+        return stride(from: first, through: last, by: 1).map {
+            HKQuantity(unit: unit, doubleValue: $0 / stepsPerUnit).doubleValue(for: .milligramsPerDeciliter)
+        }
     }
 }
 
@@ -1031,26 +1081,142 @@ struct LogView: View {
 
 // MARK: - Therapy profiles
 
-/// Owns the Therapy Settings view model for one visit of the screen, so the profiles screen and the
-/// Therapy Settings screen share (and stay in sync through) the same instance.
+/// Owns the Therapy Settings view models for one visit of the screen, so the profiles screen and the
+/// Therapy Settings screen share (and stay in sync through) the same instances.
 private struct TherapySettingsScreen: View {
     @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
-    @StateObject private var therapySettingsViewModel: TherapySettingsViewModel
+    @StateObject private var bridge: StandardTherapySettingsBridge
+    @Binding var glucoseDisplayRange: GlucoseDisplayRange
 
-    init(makeViewModel: @escaping () -> TherapySettingsViewModel) {
-        _therapySettingsViewModel = StateObject(wrappedValue: makeViewModel())
+    init(glucoseDisplayRange: Binding<GlucoseDisplayRange>, makeBridge: @escaping () -> StandardTherapySettingsBridge) {
+        _glucoseDisplayRange = glucoseDisplayRange
+        _bridge = StateObject(wrappedValue: makeBridge())
     }
 
     var body: some View {
-        TherapySettingsView(mode: .settings, viewModel: therapySettingsViewModel)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    NavigationLink(destination: TherapyProfilesView(liveViewModel: therapySettingsViewModel)
-                                    .environmentObject(displayGlucosePreference)) {
-                        Text(NSLocalizedString("Profiles", comment: "Button in Therapy Settings that opens the therapy profiles list"))
-                    }
+        TherapySettingsView(
+            mode: .settings,
+            viewModel: bridge.displayViewModel,
+            headerContent: bridge.isStandardActive ? nil : AnyView(standardNotice),
+            additionalContent: AnyView(GlucoseRangeCard(range: $glucoseDisplayRange).environmentObject(displayGlucosePreference))
+        )
+        .onAppear {
+            bridge.reload()
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink(destination: TherapyProfilesView(liveViewModel: bridge.liveViewModel)
+                                .environmentObject(displayGlucosePreference)) {
+                    Text(NSLocalizedString("Profiles", comment: "Button in Therapy Settings that opens the therapy profiles list"))
                 }
             }
+        }
+    }
+
+    private var standardNotice: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle.fill")
+                .foregroundColor(.accentColor)
+            Text(bridge.activeProfileName.map {
+                String(format: NSLocalizedString("Profile “%@” is active and Loop uses its values. Basal rates, carb ratios and insulin sensitivities shown here belong to Standard; changes only affect Standard.", comment: "Notice in Therapy Settings while another therapy profile is active (1: profile name)"), $0)
+            } ?? NSLocalizedString("Loop uses settings that differ from Standard. Basal rates, carb ratios and insulin sensitivities shown here belong to Standard; changes only affect Standard.", comment: "Notice in Therapy Settings while the live settings match no profile"))
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// Shows the live therapy settings with basal rates, carb ratios and insulin sensitivities taken from the
+/// Standard profile. Edits of those three always update Standard and only reach Loop while Standard is active.
+final class StandardTherapySettingsBridge: ObservableObject, TherapySettingsViewModelDelegate {
+    let liveViewModel: TherapySettingsViewModel
+    private let sensitivityOverridesEnabled: Bool
+    private let adultChildInsulinModelSelectionEnabled: Bool
+    private(set) lazy var displayViewModel: TherapySettingsViewModel = TherapySettingsViewModel(
+        therapySettings: liveViewModel.therapySettings,
+        sensitivityOverridesEnabled: sensitivityOverridesEnabled,
+        adultChildInsulinModelSelectionEnabled: adultChildInsulinModelSelectionEnabled,
+        delegate: self
+    )
+    @Published private(set) var isStandardActive = true
+    @Published private(set) var activeProfileName: String?
+
+    init(liveViewModel: TherapySettingsViewModel, sensitivityOverridesEnabled: Bool, adultChildInsulinModelSelectionEnabled: Bool) {
+        self.liveViewModel = liveViewModel
+        self.sensitivityOverridesEnabled = sensitivityOverridesEnabled
+        self.adultChildInsulinModelSelectionEnabled = adultChildInsulinModelSelectionEnabled
+        reload()
+    }
+
+    private var standard: TherapyProfile? {
+        TherapyProfile.ensureStandard(from: liveViewModel.therapySettings)
+    }
+
+    func reload() {
+        let live = liveViewModel.therapySettings
+        var display = live
+        if let standard = standard {
+            display.basalRateSchedule = standard.basalRateSchedule
+            display.carbRatioSchedule = standard.carbRatioSchedule
+            display.insulinSensitivitySchedule = standard.insulinSensitivitySchedule
+            isStandardActive = standard.matches(live)
+        } else {
+            isStandardActive = true
+        }
+        activeProfileName = isStandardActive ? nil : UserDefaults.standard.therapyProfiles.first { $0.matches(live) }?.name
+        displayViewModel.therapySettings = display
+    }
+
+    func syncBasalRateSchedule(items: [RepeatingScheduleValue<Double>], completion: @escaping (Swift.Result<BasalRateSchedule, Error>) -> Void) {
+        if standard?.matches(liveViewModel.therapySettings) ?? true {
+            liveViewModel.syncBasalRateSchedule(items: items, completion: completion)
+        } else if let schedule = BasalRateSchedule(dailyItems: items, timeZone: liveViewModel.therapySettings.basalRateSchedule?.timeZone) {
+            completion(.success(schedule))
+        } else {
+            completion(.failure(TherapyProfileError.invalidSchedule))
+        }
+    }
+
+    func syncDeliveryLimits(deliveryLimits: DeliveryLimits, completion: @escaping (Swift.Result<DeliveryLimits, Error>) -> Void) {
+        liveViewModel.syncDeliveryLimits(deliveryLimits: deliveryLimits, completion: completion)
+    }
+
+    func saveCompletion(therapySettings: TherapySettings) {
+        let live = liveViewModel.therapySettings
+        var newLive = therapySettings
+        var profiles = UserDefaults.standard.therapyProfiles
+        if let index = profiles.firstIndex(where: { $0.isStandardProfile }) {
+            let wasActive = profiles[index].matches(live)
+            if let basalRates = therapySettings.basalRateSchedule {
+                profiles[index].basalRateSchedule = basalRates
+            }
+            if let carbRatios = therapySettings.carbRatioSchedule {
+                profiles[index].carbRatioSchedule = carbRatios
+            }
+            if let sensitivities = therapySettings.insulinSensitivitySchedule {
+                profiles[index].insulinSensitivitySchedule = sensitivities
+            }
+            UserDefaults.standard.therapyProfiles = profiles
+            if !wasActive {
+                newLive.basalRateSchedule = live.basalRateSchedule
+                newLive.carbRatioSchedule = live.carbRatioSchedule
+                newLive.insulinSensitivitySchedule = live.insulinSensitivitySchedule
+            }
+        }
+
+        liveViewModel.therapySettings = newLive
+        if let basalRates = newLive.basalRateSchedule {
+            liveViewModel.saveBasalRates(basalRates: basalRates)
+        }
+        // Called from inside the display view model's own save; refresh it afterwards.
+        DispatchQueue.main.async {
+            self.reload()
+        }
+    }
+
+    func pumpSupportedIncrements() -> PumpSupportedIncrements? {
+        liveViewModel.pumpSupportedIncrements()
     }
 }
 
@@ -1068,13 +1234,51 @@ enum TherapyProfileError: LocalizedError {
     }
 }
 
+extension TherapyProfile {
+    var isStandardProfile: Bool {
+        isStandard == true
+    }
+
+    func matches(_ settings: TherapySettings) -> Bool {
+        settings.basalRateSchedule == basalRateSchedule
+            && settings.carbRatioSchedule == carbRatioSchedule
+            && settings.insulinSensitivitySchedule == insulinSensitivitySchedule
+    }
+
+    /// Returns the stored Standard profile, creating it from `settings` the first time.
+    @discardableResult
+    static func ensureStandard(from settings: TherapySettings) -> TherapyProfile? {
+        var profiles = UserDefaults.standard.therapyProfiles
+        if let standard = profiles.first(where: { $0.isStandardProfile }) {
+            return standard
+        }
+        guard let basalRates = settings.basalRateSchedule,
+              let carbRatios = settings.carbRatioSchedule,
+              let sensitivities = settings.insulinSensitivitySchedule else {
+            return nil
+        }
+        let standard = TherapyProfile(
+            name: NSLocalizedString("Standard", comment: "Name of the protected standard therapy profile"),
+            basalRateSchedule: basalRates,
+            carbRatioSchedule: carbRatios,
+            insulinSensitivitySchedule: sensitivities,
+            isStandard: true
+        )
+        profiles.insert(standard, at: 0)
+        UserDefaults.standard.therapyProfiles = profiles
+        return standard
+    }
+}
+
 final class TherapyProfilesModel: ObservableObject {
-    @Published private(set) var profiles = UserDefaults.standard.therapyProfiles
+    @Published private(set) var profiles: [TherapyProfile]
     let liveViewModel: TherapySettingsViewModel
     private var liveSettingsCancellable: AnyCancellable?
 
     init(liveViewModel: TherapySettingsViewModel) {
         self.liveViewModel = liveViewModel
+        TherapyProfile.ensureStandard(from: liveViewModel.therapySettings)
+        self.profiles = UserDefaults.standard.therapyProfiles
         // The active marker depends on the live therapy settings.
         liveSettingsCancellable = liveViewModel.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -1086,10 +1290,7 @@ final class TherapyProfilesModel: ObservableObject {
     }
 
     func isActive(_ profile: TherapyProfile) -> Bool {
-        let live = liveViewModel.therapySettings
-        return live.basalRateSchedule == profile.basalRateSchedule
-            && live.carbRatioSchedule == profile.carbRatioSchedule
-            && live.insulinSensitivitySchedule == profile.insulinSensitivitySchedule
+        profile.matches(liveViewModel.therapySettings)
     }
 
     func addProfileFromCurrentSettings() -> TherapyProfile? {
@@ -1124,14 +1325,15 @@ final class TherapyProfilesModel: ObservableObject {
 
     func delete(atOffsets offsets: IndexSet) {
         var updated = profiles
-        updated.remove(atOffsets: offsets)
+        let removable = IndexSet(offsets.filter { !profiles[$0].isStandardProfile })
+        updated.remove(atOffsets: removable)
         persist(updated)
     }
 
     /// Sends the profile's basal rates to the pump, then makes all three schedules the live therapy settings.
     func activate(_ profile: TherapyProfile, completion: @escaping (Error?) -> Void) {
         if let maximum = liveViewModel.therapySettings.maximumBasalRatePerHour,
-           profile.basalRateSchedule.items.contains(where: { $0.value > maximum }) {
+           profile.basalRateSchedule.items.contains(where: { $0.value > maximum + 1e-9 }) {
             completion(TherapyProfileError.basalRateAboveMaximum(maximum))
             return
         }
@@ -1246,6 +1448,7 @@ struct TherapyProfilesView: View {
                             }
                         }
                     }
+                    .deleteDisabled(profile.isStandardProfile)
                 }
                 .onDelete(perform: model.delete(atOffsets:))
             }
@@ -1296,6 +1499,7 @@ struct TherapyProfileDetailView: View {
         List {
             Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
                 TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
+                    .disabled(profile?.isStandardProfile == true)
             }
 
             Section {

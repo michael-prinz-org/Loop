@@ -135,6 +135,38 @@ final class TherapyOptimizerTests: XCTestCase {
 
     // MARK: - Carb ratio
 
+    func testSensitivityFactorPerGlucoseRange() {
+        var state = makeState()
+        let start = day0.addingTimeInterval(20 * hour)
+        // 120 mg/dL: falls as predicted (estimate 50). 200 mg/dL: falls only 0.8x as fast (estimate 40).
+        let normal = (0..<20).map { interval(at: start.addingTimeInterval(Double($0) * 300), counteraction: 0, insulinVelocity: -1.0, glucose: 120) }
+        let high = (20..<30).map { interval(at: start.addingTimeInterval(Double($0) * 300), counteraction: 0.2, insulinVelocity: -1.0, glucose: 200) }
+        TherapyOptimizerEngine.ingest(normal + high, scheduledBasal: { _ in 1.0 }, into: &state)
+        TherapyOptimizerEngine.applyDailyUpdate(to: &state, on: day0.addingTimeInterval(day))
+
+        let ranges = state.sensitivityByGlucose ?? []
+        XCTAssertEqual(ranges.count, 5)
+        XCTAssertEqual(ranges[2].factor ?? 0, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(ranges[3].factor ?? 0, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(ranges[3].sensitivity ?? 0, 40, accuracy: 0.0001)
+        XCTAssertNil(ranges[0].factor)
+        XCTAssertEqual(ranges[0].dataDays, 0)
+    }
+
+    func testStateWithoutGlucoseRangesStillDecodes() throws {
+        var state = makeState()
+        state.summaries = [TherapyOptimizerDaySummary(day: day0)]
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as! [String: Any]
+        json.removeValue(forKey: "sensitivityByGlucose")
+        var summaries = json["summaries"] as! [[String: Any]]
+        summaries[0].removeValue(forKey: "sensitivityByGlucose")
+        json["summaries"] = summaries
+        let decoded = try JSONDecoder().decode(TherapyOptimizerState.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(decoded.summaries[0].sensitivityByGlucose)
+    }
+
+    // MARK: - Carb ratio
+
     func testMealEstimatesCarbRatio() {
         var state = makeState()
         let start = day0.addingTimeInterval(12 * hour)
@@ -231,8 +263,18 @@ final class TherapyOptimizerTests: XCTestCase {
 
         let schedule = state.calculatedBasalSchedule(maximumBasalRate: 1.2, maximumEntryCount: 24)
         XCTAssertEqual(schedule?.items.count, 3)
-        XCTAssertEqual(schedule?.items[0].value ?? 0, 1.05, accuracy: 0.0001)
-        XCTAssertEqual(schedule?.items[1].value ?? 0, 1.2, accuracy: 0.0001)
+        XCTAssertEqual(schedule?.items[0].value, Double(21) / 20)
+        XCTAssertEqual(schedule?.items[1].value, Double(24) / 20)
+    }
+
+    func testBasalExportProducesExactPumpRates() {
+        var state = makeState()
+        state.basal.calculated = Array(repeating: 0.72, count: 24)
+        state.basal.calculated[12] = 0.73
+        state.basal.calculated[13] = 0.15
+
+        let values = state.calculatedBasalSchedule(maximumBasalRate: nil, maximumEntryCount: nil)?.items.map { $0.value }
+        XCTAssertEqual(values, [Double(14) / 20, Double(15) / 20, Double(3) / 20, Double(14) / 20])
     }
 
     func testStateRoundTripsThroughJSON() throws {

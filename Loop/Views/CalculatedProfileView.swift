@@ -52,6 +52,7 @@ struct CalculatedProfileView: View {
                 statusSection(state)
                 basalSection(state)
                 sensitivitySection(state)
+                sensitivityByGlucoseSection(state)
                 carbRatioSection(state)
             }
         }
@@ -105,6 +106,7 @@ struct CalculatedProfileView: View {
             ForEach(0..<24, id: \.self) { hour in
                 valuesRow(hourLabel(hour), start: state.basal.start[hour], calculated: state.basal.calculated[hour], dataDays: state.basal.dataDays[hour], format: "%.2f")
             }
+            valuesRow(NSLocalizedString("Total U/day", comment: "Row label for the total daily basal insulin"), start: state.basal.start.reduce(0, +), calculated: state.basal.calculated.reduce(0, +), dataDays: nil, format: "%.2f")
         }
     }
 
@@ -132,6 +134,54 @@ struct CalculatedProfileView: View {
         NSLocalizedString("All day", comment: "Row label for the all-day calculated value")
     }
 
+    private func sensitivityByGlucoseSection(_ state: TherapyOptimizerState) -> some View {
+        let format = state.sensitivityUnit == .milligramsPerDeciliter ? "%.0f" : "%.1f"
+        let bounds = TherapyOptimizerEngine.glucoseRangeUpperBounds.map { String(format: format, state.displaySensitivity($0)) }
+        let ranges = state.sensitivityByGlucose ?? []
+        return Section(
+            header: VStack(alignment: .leading, spacing: 2) {
+                Text(NSLocalizedString("Insulin Sensitivity by Glucose", comment: "Header of the insulin sensitivity by glucose range table"))
+                Text(NSLocalizedString("Glucose · Factor · Sensitivity · Days", comment: "Column legend of the insulin sensitivity by glucose range table"))
+                    .font(.caption2)
+            },
+            footer: Text(NSLocalizedString("Factor relative to your overall insulin sensitivity: below 1 means insulin works less in that range. Information only; Loop cannot use it for dosing.", comment: "Footer of the insulin sensitivity by glucose range table"))
+        ) {
+            ForEach(0..<TherapyOptimizerEngine.glucoseRangeCount, id: \.self) { range in
+                glucoseRangeRow(glucoseRangeLabel(range, bounds: bounds), range: range < ranges.count ? ranges[range] : nil, state: state, format: format)
+            }
+        }
+    }
+
+    private func glucoseRangeLabel(_ range: Int, bounds: [String]) -> String {
+        if range == 0 {
+            return "< \(bounds[0])"
+        }
+        if range == bounds.count {
+            return "> \(bounds[bounds.count - 1])"
+        }
+        return "\(bounds[range - 1])–\(bounds[range])"
+    }
+
+    private func glucoseRangeRow(_ title: String, range: TherapyOptimizerGlucoseRangeSensitivity?, state: TherapyOptimizerState, format: String) -> some View {
+        let dataDays = range?.dataDays ?? 0
+        return HStack {
+            Text(title)
+                .frame(width: 80, alignment: .leading)
+            Spacer()
+            Text(range?.factor.map { String(format: "×%.2f", $0) } ?? "–")
+                .bold()
+                .frame(minWidth: 56, alignment: .trailing)
+            Text(range?.sensitivity.map { String(format: format, state.displaySensitivity($0)) } ?? "–")
+                .foregroundColor(.secondary)
+                .frame(minWidth: 48, alignment: .trailing)
+            Text("\(dataDays)")
+                .foregroundColor(.secondary)
+                .frame(minWidth: 24, alignment: .trailing)
+        }
+        .font(.footnote.monospacedDigit())
+        .opacity(dataDays >= TherapyOptimizerEngine.reliableHourDataDays ? 1 : 0.5)
+    }
+
     private func header(_ title: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
@@ -152,7 +202,7 @@ struct CalculatedProfileView: View {
         }
     }
 
-    private func valuesRow(_ title: String, start: Double, calculated: Double, dataDays: Int, format: String) -> some View {
+    private func valuesRow(_ title: String, start: Double, calculated: Double, dataDays: Int?, format: String) -> some View {
         let change = start != 0 ? (calculated / start - 1) * 100 : 0
         return HStack {
             Text(title)
@@ -166,12 +216,12 @@ struct CalculatedProfileView: View {
             Text(String(format: "%+.0f%%", change))
                 .foregroundColor(.secondary)
                 .frame(minWidth: 44, alignment: .trailing)
-            Text("\(dataDays)")
+            Text(dataDays.map { "\($0)" } ?? "")
                 .foregroundColor(.secondary)
                 .frame(minWidth: 24, alignment: .trailing)
         }
         .font(.footnote.monospacedDigit())
-        .opacity(dataDays >= TherapyOptimizerEngine.reliableHourDataDays ? 1 : 0.5)
+        .opacity((dataDays ?? TherapyOptimizerEngine.reliableHourDataDays) >= TherapyOptimizerEngine.reliableHourDataDays ? 1 : 0.5)
     }
 }
 

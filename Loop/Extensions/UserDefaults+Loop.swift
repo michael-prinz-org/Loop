@@ -136,4 +136,6 @@ struct TherapyProfile: Codable, Identifiable, Equatable {
     var basalRateSchedule: BasalRateSchedule
     var carbRatioSchedule: CarbRatioSchedule
     var insulinSensitivitySchedule: InsulinSensitivitySchedule
+    /// Optional so profiles saved before this field existed still decode.
+    var isStandard: Bool?
 }

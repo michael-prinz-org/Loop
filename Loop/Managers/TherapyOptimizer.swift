@@ -93,6 +93,8 @@ struct TherapyOptimizerDaySummary: Codable, Equatable {
     var sensitivityAllDay = TherapyOptimizerEstimates()
     var carbRatio = Array(repeating: TherapyOptimizerEstimates(), count: 24)
     var carbRatioAllDay = TherapyOptimizerEstimates()
+    /// Optional so state saved before this field existed still decodes.
+    var sensitivityByGlucose: [TherapyOptimizerEstimates]?
     var isCompacted = false
 
     init(day: Date) {
@@ -106,8 +108,21 @@ struct TherapyOptimizerDaySummary: Codable, Equatable {
         }
         sensitivityAllDay.compact()
         carbRatioAllDay.compact()
+        sensitivityByGlucose = sensitivityByGlucose?.map { estimates in
+            var estimates = estimates
+            estimates.compact()
+            return estimates
+        }
         isCompacted = true
     }
+}
+
+/// Insulin sensitivity observed while glucose was within one range, relative to the overall value.
+struct TherapyOptimizerGlucoseRangeSensitivity: Codable, Equatable {
+    /// mg/dL/U
+    var sensitivity: Double?
+    var factor: Double?
+    var dataDays: Int
 }
 
 /// 24 hourly values plus an all-day value, each with its start value and the number of days with data.
@@ -162,6 +177,8 @@ struct TherapyOptimizerState: Codable, Equatable {
     var lastDailyUpdate: Date?
     var hypoHoldUntil: Date?
     var unexplainedRiseSince: Date?
+    /// One entry per `TherapyOptimizerEngine.glucoseRangeUpperBounds` range; display-only.
+    var sensitivityByGlucose: [TherapyOptimizerGlucoseRangeSensitivity]?
 
     init(startedAt: Date, timeZone: TimeZone, basal: [Double], sensitivity: [Double], carbRatio: [Double], sensitivityUnitString: String, processingStart: Date) {
         self.startedAt = startedAt
@@ -244,6 +261,14 @@ enum TherapyOptimizerEngine {
     static let sensitivityRatioRange = 0.25...4.0
     static let carbRatioRange = 3.0...40.0
     static let minimumMealInsulin = 0.3
+    /// mg/dL; values at or above the last bound fall into an extra top range.
+    static let glucoseRangeUpperBounds: [Double] = [70, 100, 180, 250]
+    static var glucoseRangeCount: Int { glucoseRangeUpperBounds.count + 1 }
+    static let glucoseRangeMinimumDaily = 3
+
+    static func glucoseRangeIndex(for glucose: Double) -> Int {
+        glucoseRangeUpperBounds.firstIndex { glucose < $0 } ?? glucoseRangeUpperBounds.count
+    }
 
     // MARK: - Ingestion
 
@@ -307,6 +332,10 @@ enum TherapyOptimizerEngine {
         let index = summaryIndex(for: interval.start, calendar: calendar, in: &state)
         state.summaries[index].sensitivity[calendar.component(.hour, from: interval.start)].add(estimate)
         state.summaries[index].sensitivityAllDay.add(estimate)
+
+        var byGlucose = state.summaries[index].sensitivityByGlucose ?? Array(repeating: TherapyOptimizerEstimates(), count: glucoseRangeCount)
+        byGlucose[glucoseRangeIndex(for: interval.glucose)].add(estimate)
+        state.summaries[index].sensitivityByGlucose = byGlucose
     }
 
     static func ingest(_ meals: [TherapyOptimizerMeal], into state: inout TherapyOptimizerState) {
@@ -394,6 +423,14 @@ enum TherapyOptimizerEngine {
             state.carbRatio.calculatedAllDay = step(state.carbRatio.calculatedAllDay, toward: target, start: state.carbRatio.startAllDay)
         }
 
+        let overallSensitivity = TherapyOptimizerMath.weightedMedian(estimateSamples(window.map { $0.sensitivityAllDay }, minimumCount: 1))
+        state.sensitivityByGlucose = (0..<glucoseRangeCount).map { (range: Int) -> TherapyOptimizerGlucoseRangeSensitivity in
+            let samples = estimateSamples(window.compactMap { $0.sensitivityByGlucose?[range] }, minimumCount: glucoseRangeMinimumDaily)
+            let sensitivity = TherapyOptimizerMath.weightedMedian(samples)
+            let factor = sensitivity.flatMap { value in overallSensitivity.map { value / $0 } }
+            return TherapyOptimizerGlucoseRangeSensitivity(sensitivity: sensitivity, factor: factor, dataDays: samples.count)
+        }
+
         state.lastDailyUpdate = day
     }
 
@@ -423,6 +460,7 @@ enum TherapyOptimizerEngine {
         state.sensitivity.resetCalculated()
         state.carbRatio.resetCalculated()
         state.lastDailyUpdate = nil
+        state.sensitivityByGlucose = nil
 
         let calendar = state.calendar
         guard let firstDay = state.summaries.first?.day,
@@ -465,11 +503,11 @@ extension TherapyOptimizerState {
 
     /// Rounded to 0.05 U/h, which every supported pump can deliver.
     func calculatedBasalSchedule(maximumBasalRate: Double?, maximumEntryCount: Int?) -> BasalRateSchedule? {
-        let increment = 0.05
+        // Dividing (not multiplying by 0.05) yields the exact doubles pumps list as supported rates (n / 20).
         let hourly = basal.calculated.map { value -> Double in
-            let rounded = max(0, (value / increment).rounded() * increment)
+            let rounded = max(0, (value * 20).rounded() / 20)
             guard let maximumBasalRate = maximumBasalRate else { return rounded }
-            return min(rounded, (maximumBasalRate / increment + 1e-9).rounded(.down) * increment)
+            return min(rounded, (maximumBasalRate * 20 + 1e-9).rounded(.down) / 20)
         }
         var items = TherapyOptimizerMath.scheduleItems(hourly)
         if let maximumEntryCount = maximumEntryCount, maximumEntryCount > 0 {
@@ -484,8 +522,8 @@ extension TherapyOptimizerState {
     func calculatedSensitivitySchedule(hourly: Bool) -> InsulinSensitivitySchedule? {
         let values = hourly ? sensitivity.exportHourly(minimumDataDays: TherapyOptimizerEngine.reliableHourDataDays) : Array(repeating: sensitivity.calculatedAllDay, count: 24)
         let unit = sensitivityUnit
-        let increment = unit == .milligramsPerDeciliter ? 1.0 : 0.1
-        let rounded = values.map { (displaySensitivity($0) / increment).rounded() * increment }
+        let stepsPerUnit = unit == .milligramsPerDeciliter ? 1.0 : 10.0
+        let rounded = values.map { (displaySensitivity($0) * stepsPerUnit).rounded() / stepsPerUnit }
         return InsulinSensitivitySchedule(unit: unit, dailyItems: TherapyOptimizerMath.scheduleItems(rounded), timeZone: timeZone)
     }
 
