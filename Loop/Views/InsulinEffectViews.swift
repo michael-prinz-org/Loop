@@ -130,14 +130,25 @@ struct InsulinEffectDetailView: View {
     }
 }
 
+/// Shared so edits survive SwiftUI re-creating the settings screen; every change is saved immediately.
+final class InsulinEffectMonitorSettingsStore: ObservableObject {
+    static let shared = InsulinEffectMonitorSettingsStore()
+
+    @Published var settings = UserDefaults.standard.insulinEffectMonitorSettings {
+        didSet {
+            UserDefaults.standard.insulinEffectMonitorSettings = settings
+        }
+    }
+}
+
 struct InsulinEffectMonitorSettingsView: View {
     @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
-    @State private var settings = UserDefaults.standard.insulinEffectMonitorSettings
+    @ObservedObject private var store = InsulinEffectMonitorSettingsStore.shared
 
     var body: some View {
         List {
             Section(footer: Text(NSLocalizedString("Shows on the main screen and on the watch (\"!\") when glucose rises although insulin should lower it, e.g. because of a leaking pod. Display only; dosing is not changed.", comment: "Footer of the insulin effect monitor switch"))) {
-                Toggle(NSLocalizedString("Insulin Effect Monitor", comment: "Switch that turns the insulin effect monitor on"), isOn: $settings.isEnabled)
+                Toggle(NSLocalizedString("Insulin Effect Monitor", comment: "Switch that turns the insulin effect monitor on"), isOn: $store.settings.isEnabled)
             }
 
             Section(footer: Text(NSLocalizedString("Lower values warn earlier but more often. \"Watch\" appears when one check is exceeded, \"Attention\" when they confirm each other or a correction does not lower glucose within an hour.", comment: "Footer of the insulin effect monitor thresholds"))) {
@@ -157,25 +168,22 @@ struct InsulinEffectMonitorSettingsView: View {
                     String(format: NSLocalizedString("%d min", comment: "Custom loop interval value in minutes (1: number of minutes)"), Int($0))
                 }
                 Button(NSLocalizedString("Reset to Defaults", comment: "Button that resets the insulin effect thresholds")) {
-                    settings = InsulinEffectMonitorSettings(isEnabled: settings.isEnabled)
+                    store.settings = InsulinEffectMonitorSettings(isEnabled: store.settings.isEnabled)
                 }
             }
-            .disabled(!settings.isEnabled)
+            .disabled(!store.settings.isEnabled)
         }
         .insetGroupedListStyle()
         .navigationTitle(NSLocalizedString("Insulin Effect", comment: "Title of the insulin effect screens and status row"))
-        .onChange(of: settings) { newValue in
-            UserDefaults.standard.insulinEffectMonitorSettings = newValue
-        }
     }
 
     private func picker(_ title: String, _ keyPath: WritableKeyPath<InsulinEffectMonitorSettings, Double>, options: [Double], label: @escaping (Double) -> String) -> some View {
         let selection = Binding<Double>(
             get: {
-                let current = settings[keyPath: keyPath]
+                let current = store.settings[keyPath: keyPath]
                 return options.min { abs($0 - current) < abs($1 - current) } ?? current
             },
-            set: { settings[keyPath: keyPath] = $0 }
+            set: { store.settings[keyPath: keyPath] = $0 }
         )
         return ExpandableWheelPicker(title: Text(title), selection: selection, options: options, label: label)
     }

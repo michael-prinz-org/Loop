@@ -350,6 +350,9 @@ final class WatchDataManager: NSObject {
 
             let insulinEffectLevel = InsulinEffectMonitor.assess(insulinEffectInput, settings: UserDefaults.standard.insulinEffectMonitorSettings).level
             context.insulinEffectLevel = insulinEffectLevel.isWarning ? insulinEffectLevel : nil
+            if let activeProfile = TherapyProfile.activeProfile(), activeProfile.isConcentrated {
+                context.insulinConcentrationLabel = activeProfile.concentration.label
+            }
 
             var preMealOverride = settings.preMealOverride
             if preMealOverride?.hasFinished() == true {

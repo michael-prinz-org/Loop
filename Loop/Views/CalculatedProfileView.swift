@@ -236,6 +236,7 @@ private struct CreateCalculatedProfileSheet: View {
     @State private var includeCarbRatio = true
     @State private var hourlySensitivity = false
     @State private var hourlyCarbRatio = false
+    @State private var isU200 = false
     @State private var errorMessage: String?
 
     var body: some View {
@@ -244,7 +245,7 @@ private struct CreateCalculatedProfileSheet: View {
                 Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
                     TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
                 }
-                Section(footer: Text(NSLocalizedString("The new profile is a U100 profile; use “Create U200 Profile” on it for U200. Parts that are not taken are copied from the active profile (in U100 values).", comment: "Footer of the create-from-calculated sheet"))) {
+                Section(footer: Text(NSLocalizedString("Parts that are not taken are copied from the active profile.", comment: "Footer of the create-from-calculated sheet"))) {
                     Toggle(NSLocalizedString("Basal Rates", comment: "Therapy profile basal rates row"), isOn: $includeBasal)
                     Toggle(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"), isOn: $includeSensitivity)
                     if includeSensitivity {
@@ -254,6 +255,9 @@ private struct CreateCalculatedProfileSheet: View {
                     if includeCarbRatio {
                         modePicker(selection: $hourlyCarbRatio)
                     }
+                }
+                Section(footer: Text(NSLocalizedString("Calculated values are U100. With U200 on, basal rates and limits are halved and carb ratios and insulin sensitivities doubled.", comment: "Footer of the U200 switch when creating a profile from calculated values"))) {
+                    Toggle(NSLocalizedString("U200 Insulin", comment: "Switch that creates the therapy profile for U200 insulin"), isOn: $isU200)
                 }
                 if let errorMessage = errorMessage {
                     Section {
@@ -296,12 +300,19 @@ private struct CreateCalculatedProfileSheet: View {
         let sensitivity = includeSensitivity ? state.calculatedSensitivitySchedule(hourly: hourlySensitivity) : base?.insulinSensitivitySchedule
         let carbRatio = includeCarbRatio ? state.calculatedCarbRatioSchedule(hourly: hourlyCarbRatio) : base?.carbRatioSchedule
 
-        guard let basal = basal, let sensitivity = sensitivity, let carbRatio = carbRatio else {
+        guard let basal = basal, let sensitivity = sensitivity, let carbRatio = carbRatio,
+              let profile = TherapyProfile(
+                name: name.trimmingCharacters(in: .whitespaces),
+                basalRateSchedule: basal,
+                carbRatioSchedule: carbRatio,
+                insulinSensitivitySchedule: sensitivity,
+                maximumBasalRatePerHour: maximumBasalRate,
+                maximumBolus: base?.maximumBolus ?? live.maximumBolus
+              ).copy(named: name.trimmingCharacters(in: .whitespaces), concentration: isU200 ? .u200 : .u100) else {
             errorMessage = NSLocalizedString("The profile could not be created.", comment: "Error when a profile cannot be created from calculated values")
             return
         }
-        profiles.addProfile(name: name, basalRateSchedule: basal, carbRatioSchedule: carbRatio, insulinSensitivitySchedule: sensitivity,
-                            maximumBasalRatePerHour: maximumBasalRate, maximumBolus: base?.maximumBolus ?? live.maximumBolus)
+        profiles.add(profile)
         presentationMode.wrappedValue.dismiss()
     }
 }

@@ -198,6 +198,7 @@ struct SimpleBolusView: View {
     private var bolusEntryRow: some View {
         HStack {
             Text("Bolus", comment: "Label for bolus entry row on simple bolus screen")
+            InsulinConcentrationBadge()
             Spacer()
             HStack(alignment: .firstTextBaseline) {
                 DismissibleKeyboardTextField(

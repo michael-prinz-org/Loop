@@ -1349,6 +1349,22 @@ extension TherapyProfile {
         )
     }
 
+    /// A new, unsaved profile with these values for the given insulin, converted if the concentration differs.
+    func copy(named name: String, concentration target: InsulinConcentration) -> TherapyProfile? {
+        guard target == concentration else {
+            return converted(toConcentration: target, name: name)
+        }
+        return TherapyProfile(
+            name: name,
+            basalRateSchedule: basalRateSchedule,
+            carbRatioSchedule: carbRatioSchedule,
+            insulinSensitivitySchedule: insulinSensitivitySchedule,
+            maximumBasalRatePerHour: maximumBasalRatePerHour,
+            maximumBolus: maximumBolus,
+            insulinConcentration: insulinConcentration
+        )
+    }
+
     /// Returns the stored Standard profile, creating it from `settings` the first time.
     @discardableResult
     static func ensureStandard(from settings: TherapySettings) -> TherapyProfile? {
@@ -1428,41 +1444,22 @@ final class TherapyProfilesModel: ObservableObject {
         profiles.first { $0.isStandardProfile }
     }
 
-    func addProfileFromCurrentSettings() -> TherapyProfile? {
-        guard let profile = TherapyProfile(
+    func profileFromCurrentSettings() -> TherapyProfile? {
+        TherapyProfile(
             name: String(format: NSLocalizedString("Profile %d", comment: "Default name of a new therapy profile (1: profile number)"), profiles.count + 1),
             settings: liveViewModel.therapySettings,
             insulinConcentration: TherapyProfile.activeProfile()?.insulinConcentration
-        ) else {
-            return nil
-        }
-        persist(profiles + [profile])
-        return profile
+        )
     }
 
-    func addProfile(name: String, basalRateSchedule: BasalRateSchedule, carbRatioSchedule: CarbRatioSchedule, insulinSensitivitySchedule: InsulinSensitivitySchedule, maximumBasalRatePerHour: Double?, maximumBolus: Double?) {
-        persist(profiles + [TherapyProfile(
-            name: name,
-            basalRateSchedule: basalRateSchedule,
-            carbRatioSchedule: carbRatioSchedule,
-            insulinSensitivitySchedule: insulinSensitivitySchedule,
-            maximumBasalRatePerHour: maximumBasalRatePerHour,
-            maximumBolus: maximumBolus
-        )])
+    func add(_ profile: TherapyProfile) {
+        persist(profiles + [profile])
     }
 
     /// The active profile in U100 values, used as the base for profiles created from calculated (U100) values.
     var activeProfileInU100: TherapyProfile? {
         guard let active = TherapyProfile.activeProfile() else { return nil }
         return active.isConcentrated ? active.converted(toConcentration: .u100, name: active.name) : active
-    }
-
-    func addU200Copy(of profile: TherapyProfile) -> TherapyProfile? {
-        guard let copy = profile.converted(toConcentration: .u200, name: String(format: NSLocalizedString("%@ U200", comment: "Name of a U200 copy of a therapy profile (1: original name)"), profile.name)) else {
-            return nil
-        }
-        persist(profiles + [copy])
-        return copy
     }
 
     func save(_ profile: TherapyProfile) {
@@ -1620,6 +1617,8 @@ final class TherapyProfileEditorModel: ObservableObject, TherapySettingsViewMode
 struct TherapyProfilesView: View {
     @StateObject private var model: TherapyProfilesModel
     @State private var selectedProfileID: UUID?
+    @State private var newProfileSource: TherapyProfile?
+    @State private var createdProfileID: UUID?
 
     init(liveViewModel: TherapySettingsViewModel) {
         _model = StateObject(wrappedValue: TherapyProfilesModel(liveViewModel: liveViewModel))
@@ -1661,7 +1660,7 @@ struct TherapyProfilesView: View {
 
             Section {
                 Button(NSLocalizedString("New Profile from Current Settings", comment: "Button that creates a therapy profile from the current therapy settings")) {
-                    selectedProfileID = model.addProfileFromCurrentSettings()?.id
+                    newProfileSource = model.profileFromCurrentSettings()
                 }
             }
 
@@ -1673,6 +1672,72 @@ struct TherapyProfilesView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle(Text(NSLocalizedString("Profiles", comment: "Title of the therapy profiles list")))
+        .sheet(item: $newProfileSource, onDismiss: {
+            selectedProfileID = createdProfileID
+            createdProfileID = nil
+        }) { source in
+            NewTherapyProfileSheet(source: source, defaultName: source.name) { profile in
+                model.add(profile)
+                createdProfileID = profile.id
+            }
+        }
+    }
+}
+
+/// Confirms name and insulin concentration before a profile is created.
+struct NewTherapyProfileSheet: View {
+    let source: TherapyProfile
+    let onCreate: (TherapyProfile) -> Void
+
+    @Environment(\.presentationMode) private var presentationMode
+    @State private var name: String
+    @State private var isU200 = false
+    @State private var errorMessage: String?
+
+    init(source: TherapyProfile, defaultName: String, onCreate: @escaping (TherapyProfile) -> Void) {
+        self.source = source
+        self.onCreate = onCreate
+        _name = State(initialValue: defaultName)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
+                    TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
+                }
+                Section(footer: Text(NSLocalizedString("U200 halves basal rates, maximum basal rate and maximum bolus and doubles carb ratios and insulin sensitivities, so the same insulin effect results with insulin of double concentration. All amounts in Loop are then pump units.", comment: "Footer of the U200 switch when creating a therapy profile"))) {
+                    Toggle(NSLocalizedString("U200 Insulin", comment: "Switch that creates the therapy profile for U200 insulin"), isOn: $isU200)
+                }
+                if let errorMessage = errorMessage {
+                    Section {
+                        Text(errorMessage).foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle(Text(NSLocalizedString("New Profile", comment: "Title of the create-from-calculated sheet")))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(NSLocalizedString("Cancel", comment: "Cancel creating a profile from calculated values")) {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(NSLocalizedString("Create", comment: "Create a profile from calculated values"), action: create)
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func create() {
+        guard let profile = source.copy(named: name.trimmingCharacters(in: .whitespaces), concentration: isU200 ? .u200 : .u100) else {
+            errorMessage = NSLocalizedString("The profile could not be created.", comment: "Error when a profile cannot be created from calculated values")
+            return
+        }
+        onCreate(profile)
+        presentationMode.wrappedValue.dismiss()
     }
 }
 
@@ -1691,6 +1756,7 @@ struct TherapyProfileDetailView: View {
     @State private var activationTarget: TherapyProfile?
     @State private var isActivating = false
     @State private var activationErrorMessage: String?
+    @State private var copySource: TherapyProfile?
 
     init(profileID: UUID, profiles: TherapyProfilesModel) {
         self.profiles = profiles
@@ -1735,17 +1801,15 @@ struct TherapyProfileDetailView: View {
             }
 
             if let profile = profile {
-                Section(footer: Text(NSLocalizedString("A U200 copy halves basal rates, maximum basal rate and maximum bolus and doubles carb ratios and insulin sensitivities, so the same insulin effect results with insulin of double concentration. All amounts in Loop are then pump units. When a profile with another concentration is activated, insulin delivered before is converted to the new pump units, so active insulin stays correct.", comment: "Footer explaining the U200 profile copy"))) {
+                Section(footer: Text(NSLocalizedString("When a profile with another concentration is activated, insulin delivered before is converted to the new pump units, so active insulin stays correct.", comment: "Footer of the insulin concentration of a therapy profile"))) {
                     HStack {
                         Text(NSLocalizedString("Insulin", comment: "Label of the insulin concentration of a therapy profile"))
                         Spacer()
                         Text(profile.concentration.label)
                             .foregroundColor(profile.isConcentrated ? .orange : .secondary)
                     }
-                    if !profile.isConcentrated {
-                        Button(NSLocalizedString("Create U200 Profile", comment: "Button that creates a U200 copy of a therapy profile")) {
-                            _ = profiles.addU200Copy(of: profile)
-                        }
+                    Button(NSLocalizedString("Create Copy…", comment: "Button that opens the sheet to create a copy of a therapy profile, optionally for U200")) {
+                        copySource = profile
                     }
                 }
             }
@@ -1783,6 +1847,13 @@ struct TherapyProfileDetailView: View {
             Button(NSLocalizedString("OK", comment: "Dismiss the therapy profile activation error"), role: .cancel) {}
         } message: {
             Text(activationErrorMessage ?? "")
+        }
+        .sheet(item: $copySource) { source in
+            NewTherapyProfileSheet(
+                source: source,
+                defaultName: String(format: NSLocalizedString("%@ Copy", comment: "Default name of a copy of a therapy profile (1: original name)"), source.name),
+                onCreate: profiles.add
+            )
         }
     }
 

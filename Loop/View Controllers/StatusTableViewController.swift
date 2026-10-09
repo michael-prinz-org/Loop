@@ -683,6 +683,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 hudView.pumpStatusHUD.presentStatusHighlight(self.deviceManager.pumpStatusHighlight)
                 hudView.pumpStatusHUD.presentStatusBadge(self.deviceManager.pumpStatusBadge)
                 hudView.pumpStatusHUD.lifecycleProgress = self.deviceManager.pumpLifecycleProgress
+                hudView.pumpStatusHUD.insulinConcentrationText = TherapyProfile.activeProfile().flatMap { $0.isConcentrated ? $0.concentration.label : nil }
             }
 
             // Show/hide the table view rows

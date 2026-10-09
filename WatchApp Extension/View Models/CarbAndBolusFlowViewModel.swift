@@ -27,6 +27,11 @@ final class CarbAndBolusFlowViewModel: ObservableObject {
     @Published var bolusPickerValues: BolusPickerValues
     @Published var error: Error?
 
+    /// e.g. "U200" while concentrated insulin is in use
+    var insulinConcentrationLabel: String? {
+        ExtensionDelegate.shared().loopManager.activeContext?.insulinConcentrationLabel
+    }
+
     // MARK: - Other state
     let interactionStartDate = Date()
     private var carbEntryUnderConsideration: NewCarbEntry?

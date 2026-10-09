@@ -16,6 +16,55 @@ public final class PumpStatusHUDView: DeviceStatusHUDView, NibLoadable {
     @IBOutlet public weak var basalRateHUD: BasalRateHUDView!
     
     @IBOutlet public weak var pumpManagerProvidedHUD: BaseHUDView!
+
+    /// Short marker over the pump image, e.g. "U200" while concentrated insulin is in use; nil hides it.
+    public var insulinConcentrationText: String? {
+        didSet {
+            if insulinConcentrationText != oldValue {
+                updateInsulinConcentrationLabel()
+            }
+        }
+    }
+
+    private lazy var insulinConcentrationLabel: UILabel = {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 10, weight: .bold)
+        label.textColor = .white
+        label.backgroundColor = .systemOrange
+        label.layer.cornerRadius = 4
+        label.clipsToBounds = true
+        label.isHidden = true
+        return label
+    }()
+
+    private var insulinConcentrationConstraints: [NSLayoutConstraint] = []
+
+    private func updateInsulinConcentrationLabel() {
+        let label = insulinConcentrationLabel
+        NSLayoutConstraint.deactivate(insulinConcentrationConstraints)
+        insulinConcentrationConstraints = []
+        guard let text = insulinConcentrationText, statusHighlightView?.isHidden != false else {
+            label.isHidden = true
+            return
+        }
+        if label.superview == nil {
+            addSubview(label)
+        }
+        label.text = " \(text) "
+        let anchorView: UIView = pumpManagerProvidedHUD.flatMap { $0.superview != nil ? $0 : nil } ?? self
+        let preferredTop = label.topAnchor.constraint(equalTo: anchorView.topAnchor)
+        preferredTop.priority = .defaultHigh
+        insulinConcentrationConstraints = [
+            label.centerXAnchor.constraint(equalTo: anchorView.centerXAnchor),
+            preferredTop,
+            // Pump HUDs center a ~34 pt reservoir image whose volume text sits inside it; stay above the image.
+            label.bottomAnchor.constraint(lessThanOrEqualTo: anchorView.centerYAnchor, constant: -18)
+        ]
+        NSLayoutConstraint.activate(insulinConcentrationConstraints)
+        label.isHidden = false
+        bringSubviewToFront(label)
+    }
         
     override public var orderPriority: HUDViewOrderPriority {
         return 3
@@ -57,6 +106,7 @@ public final class PumpStatusHUDView: DeviceStatusHUDView, NibLoadable {
         }
 
         super.presentStatusHighlight()
+        updateInsulinConcentrationLabel()
     }
     
     override public func dismissStatusHighlight() {
@@ -73,6 +123,7 @@ public final class PumpStatusHUDView: DeviceStatusHUDView, NibLoadable {
             statusStackView.addArrangedSubview(pumpManagerProvidedHUD)
             pumpManagerProvidedHUD.isHidden = false
         }
+        updateInsulinConcentrationLabel()
     }
     
     public func removePumpManagerProvidedHUD() {
@@ -82,11 +133,13 @@ public final class PumpStatusHUDView: DeviceStatusHUDView, NibLoadable {
         
         statusStackView.removeArrangedSubview(pumpManagerProvidedHUD)
         pumpManagerProvidedHUD.removeFromSuperview()
+        updateInsulinConcentrationLabel()
     }
     
     public func addPumpManagerProvidedHUDView(_ pumpManagerProvidedHUD: BaseHUDView) {
         self.pumpManagerProvidedHUD = pumpManagerProvidedHUD
         statusStackView.addArrangedSubview(self.pumpManagerProvidedHUD)
+        updateInsulinConcentrationLabel()
     }
     
 }

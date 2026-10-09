@@ -40,6 +40,8 @@ final class WatchContext: RawRepresentable {
     var eventualGlucoseDisplayTier: GlucoseDisplayTier?
     /// Only set while the insulin effect monitor warns.
     var insulinEffectLevel: InsulinEffectLevel?
+    /// e.g. "U200"; only set while concentrated insulin is in use.
+    var insulinConcentrationLabel: String?
 
     var loopLastRunDate: Date?
     var loopInterval: TimeInterval?
@@ -124,6 +126,7 @@ final class WatchContext: RawRepresentable {
         if let rawLevel = rawValue["iel"] as? InsulinEffectLevel.RawValue {
             insulinEffectLevel = InsulinEffectLevel(rawValue: rawLevel)
         }
+        insulinConcentrationLabel = rawValue["icl"] as? String
     }
 
     var rawValue: RawValue {
@@ -159,6 +162,7 @@ final class WatchContext: RawRepresentable {
         raw["gdt"] = glucoseDisplayTier?.rawValue
         raw["egdt"] = eventualGlucoseDisplayTier?.rawValue
         raw["iel"] = insulinEffectLevel?.rawValue
+        raw["icl"] = insulinConcentrationLabel
         raw["iob"] = iob
         raw["ld"] = loopLastRunDate
         raw["li"] = loopInterval

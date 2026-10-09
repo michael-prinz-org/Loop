@@ -70,6 +70,13 @@ final class InsulinEffectMonitorTests: XCTestCase {
         XCTAssertEqual(result.level, .attention)
     }
 
+    func testFallingGlucoseIsNotAnUnexpectedRise() {
+        let values = Array(repeating: 200.0, count: 8) + [195, 190, 185]
+        let result = InsulinEffectMonitor.assess(input(readings: readings(values), counteraction: 3, insulinOnBoard: 3, carbsOnBoard: 0, discrepancy: 40), settings: settings)
+        XCTAssertTrue(result.signals.isEmpty)
+        XCTAssertEqual(result.level, .normal)
+    }
+
     func testCorrectionNotWorkingIsAttention() {
         let values = Array(repeating: 250.0, count: 14)
         let result = InsulinEffectMonitor.assess(input(readings: readings(values), counteraction: 0.5, insulinOnBoard: 4, carbsOnBoard: 0), settings: settings)
@@ -117,5 +124,13 @@ final class InsulinEffectMonitorTests: XCTestCase {
 
         context.insulinEffectLevel = nil
         XCTAssertNil(WatchContext(rawValue: context.rawValue)?.insulinEffectLevel)
+    }
+
+    func testWatchContextCarriesInsulinConcentration() {
+        let context = WatchContext()
+        XCTAssertNil(WatchContext(rawValue: context.rawValue)?.insulinConcentrationLabel)
+
+        context.insulinConcentrationLabel = "U200"
+        XCTAssertEqual(WatchContext(rawValue: context.rawValue)?.insulinConcentrationLabel, "U200")
     }
 }

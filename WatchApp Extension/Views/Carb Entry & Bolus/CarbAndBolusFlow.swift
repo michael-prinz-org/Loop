@@ -113,7 +113,8 @@ extension CarbAndBolusFlow {
                     isComputingRecommendedAmount: viewModel.isComputingRecommendedBolus,
                     recommendedAmount: viewModel.recommendedBolusAmount,
                     pickerValues: viewModel.bolusPickerValues,
-                    isEditable: flowState == .bolusEntry
+                    isEditable: flowState == .bolusEntry,
+                    insulinConcentrationLabel: viewModel.insulinConcentrationLabel
                 )
             }
 

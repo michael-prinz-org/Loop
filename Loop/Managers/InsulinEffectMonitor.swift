@@ -135,15 +135,17 @@ enum InsulinEffectMonitor {
         }
 
         let hasInsulin = insulinOnBoard >= settings.minimumInsulinOnBoard
+        // Falling slower than forecast is not a rise; only a correction that stalls (checked below) matters then.
+        let isRising = (assessment.riseRate ?? 0) > 0
         if let riseRate = assessment.riseRate, let allowance = carbAllowanceRate,
            hasInsulin, riseRate - allowance >= settings.riseRateThreshold {
             assessment.signals.insert(.fastRise)
         }
-        if let counteraction = assessment.counteractionRate, let allowance = carbAllowanceRate,
+        if isRising, let counteraction = assessment.counteractionRate, let allowance = carbAllowanceRate,
            counteraction - allowance >= settings.unexplainedRateThreshold {
             assessment.signals.insert(.unexplainedRise)
         }
-        if let discrepancy = assessment.discrepancy, discrepancy >= settings.discrepancyThreshold {
+        if isRising, let discrepancy = assessment.discrepancy, discrepancy >= settings.discrepancyThreshold {
             assessment.signals.insert(.aboveForecast)
         }
         if let hourChange = assessment.hourChange, hourChange >= 0,

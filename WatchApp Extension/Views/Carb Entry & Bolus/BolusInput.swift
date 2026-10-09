@@ -17,6 +17,8 @@ struct BolusInput: View {
     var recommendedAmount: Double?
     var pickerValues: BolusPickerValues
     var isEditable: Bool
+    /// e.g. "U200"; nil for U100
+    var insulinConcentrationLabel: String? = nil
 
     private var pickerValue: Binding<Int> {
         Binding(
@@ -37,6 +39,14 @@ struct BolusInput: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let insulinConcentrationLabel {
+                Text(insulinConcentrationLabel)
+                    .font(Font.footnote.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .background(Capsule().fill(Color.orange))
+            }
+
             DoseVolumeInput(
                 volume: amount,
                 isEditable: isEditable,

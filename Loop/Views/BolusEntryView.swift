@@ -161,9 +161,12 @@ struct BolusEntryView: View {
     private var summarySection: some View {
         Section {
             VStack(spacing: 16) {
-                titleText
-                    .bold()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    titleText
+                        .bold()
+                    Spacer()
+                    InsulinConcentrationBadge()
+                }
 
                 if viewModel.isManualGlucoseEntryEnabled {
                     ManualGlucoseEntryRow(quantity: $viewModel.manualGlucoseQuantity)
@@ -238,6 +241,7 @@ struct BolusEntryView: View {
     private var bolusEntryRow: some View {
         HStack {
             Text("Bolus", comment: "Label for bolus entry row on bolus screen")
+            InsulinConcentrationBadge()
             Spacer()
             HStack(alignment: .firstTextBaseline) {
                 TextField(viewModel.formatBolusAmount(0.0), text: enteredBolusStringBinding)
@@ -490,5 +494,22 @@ struct LabelBackground: ViewModifier {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(Color(.systemGray6))
             )
+    }
+}
+
+/// "U200" capsule while a concentrated-insulin profile is active; nothing for U100.
+struct InsulinConcentrationBadge: View {
+    private let concentration = TherapyProfile.activeProfile()?.concentration ?? .u100
+
+    var body: some View {
+        if concentration != .u100 {
+            Text(concentration.label)
+                .font(.caption.bold())
+                .foregroundColor(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.orange))
+                .accessibilityLabel(String(format: NSLocalizedString("%@ insulin", comment: "Accessibility label of the insulin concentration badge (1: e.g. U200)"), concentration.label))
+        }
     }
 }
