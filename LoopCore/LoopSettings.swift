@@ -396,6 +396,22 @@ public enum GlucoseDisplayTier: Int {
     case urgent
 }
 
+/// Whether delivered insulin is lowering glucose as Loop expects; computed on the phone, shown in the app and on the watch.
+public enum InsulinEffectLevel: Int, Comparable {
+    case unknown
+    case normal
+    case watch
+    case attention
+
+    public var isWarning: Bool {
+        self >= .watch
+    }
+
+    public static func < (lhs: InsulinEffectLevel, rhs: InsulinEffectLevel) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 /// The four thresholds, in mg/dL, that colour glucose values on the watch complication.
 public struct GlucoseDisplayRange: Equatable {
     public var urgentLow: Double

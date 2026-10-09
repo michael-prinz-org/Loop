@@ -42,6 +42,7 @@ extension CLKComplicationTemplate {
             eventualGlucoseDisplayTier: context.eventualGlucoseDisplayTier,
             podWakeUpCount: context.podWakeUpCount,
             lastPodWakeUpDate: context.lastPodWakeUpDate,
+            insulinEffectLevel: context.insulinEffectLevel,
             chartGenerator: makeChart)
     }
 
@@ -63,6 +64,7 @@ extension CLKComplicationTemplate {
         eventualGlucoseDisplayTier: GlucoseDisplayTier? = nil,
         podWakeUpCount: Int? = nil,
         lastPodWakeUpDate: Date? = nil,
+        insulinEffectLevel: InsulinEffectLevel? = nil,
         chartGenerator makeChart: () -> UIImage?
     ) -> CLKComplicationTemplate? {
 
@@ -209,7 +211,8 @@ extension CLKComplicationTemplate {
                                                           freshnessColor: tintColor,
                                                           fallbackTimeText: timeText,
                                                           podWakeUpCount: podWakeUpCount,
-                                                          lastPodWakeUpDate: lastPodWakeUpDate),
+                                                          lastPodWakeUpDate: lastPodWakeUpDate,
+                                                          insulinEffectLevel: insulinEffectLevel),
                     imageProvider: CLKFullColorImageProvider(fullColorImage: makeChart() ?? UIImage())
                 )
             } else {
@@ -251,9 +254,16 @@ extension CLKComplicationTemplate {
         freshnessColor: UIColor,
         fallbackTimeText: CLKTextProvider,
         podWakeUpCount: Int?,
-        lastPodWakeUpDate: Date?
+        lastPodWakeUpDate: Date?,
+        insulinEffectLevel: InsulinEffectLevel?
     ) -> CLKTextProvider {
         var providers: [CLKTextProvider] = []
+
+        if let warningColor = insulinEffectLevel?.complicationColor {
+            let warningText = CLKSimpleTextProvider(text: "!")
+            warningText.tintColor = warningColor
+            providers.append(warningText)
+        }
 
         if let isClosedLoop {
             let loopStatusText = CLKSimpleTextProvider(text: isClosedLoop ? "●" : "○")
@@ -321,6 +331,17 @@ extension GlucoseDisplayTier {
     /// Slightly translucent so overlapping chart points and lines stay readable.
     var chartColor: UIColor {
         complicationColor.withAlphaComponent(0.8)
+    }
+}
+
+private extension InsulinEffectLevel {
+    /// nil when nothing should be shown.
+    var complicationColor: UIColor? {
+        switch self {
+        case .watch: return GlucoseDisplayTier.outOfRange.complicationColor
+        case .attention: return GlucoseDisplayTier.urgent.complicationColor
+        case .unknown, .normal: return nil
+        }
     }
 }
 

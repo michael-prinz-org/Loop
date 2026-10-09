@@ -54,6 +54,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
         tableView.register(BolusProgressTableViewCell.nib(), forCellReuseIdentifier: BolusProgressTableViewCell.className)
         tableView.register(AlertPermissionsDisabledWarningCell.self, forCellReuseIdentifier: AlertPermissionsDisabledWarningCell.className)
         tableView.register(MuteAlertsWarningCell.self, forCellReuseIdentifier: MuteAlertsWarningCell.className)
+        tableView.register(InsulinEffectCell.self, forCellReuseIdentifier: InsulinEffectCell.className)
 
         if FeatureFlags.predictedGlucoseChartClampEnabled {
             statusCharts.glucose.glucoseDisplayRange = LoopConstants.glucoseChartDefaultDisplayBoundClamped
@@ -456,6 +457,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
         var totalDelivery: Double?
         var cobValues: [CarbValue]?
         var carbsOnBoard: HKQuantity?
+        var insulinEffectInput: InsulinEffectMonitorInput?
+        var insulinEffectSamples: [StoredGlucoseSample] = []
         let startDate = charts.startDate
         let basalDeliveryState = self.basalDeliveryState
         let automaticDosingEnabled = automaticDosingStatus.automaticDosingEnabled
@@ -507,6 +510,21 @@ final class StatusTableViewController: LoopChartsTableViewController {
             // always check for cob
             carbsOnBoard = state.carbsOnBoard?.quantity
 
+            insulinEffectInput = InsulinEffectMonitorInput(
+                now: Date(),
+                state: state,
+                insulinSensitivity: manager.insulinSensitivityScheduleApplyingOverrideHistory,
+                carbRatio: manager.carbRatioScheduleApplyingOverrideHistory
+            )
+
+            reloadGroup.leave()
+        }
+
+        reloadGroup.enter()
+        deviceManager.glucoseStore.getGlucoseSamples(start: Date().addingTimeInterval(-InsulinEffectMonitor.lookback), end: nil) { (result) -> Void in
+            if case .success(let samples) = result {
+                insulinEffectSamples = samples
+            }
             reloadGroup.leave()
         }
 
@@ -674,6 +692,11 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
             self.redrawCharts()
 
+            if var input = insulinEffectInput {
+                input.readings = InsulinEffectMonitorInput.readings(from: insulinEffectSamples, now: input.now)
+                self.insulinEffectAssessment = InsulinEffectMonitor.assess(input, settings: UserDefaults.standard.insulinEffectMonitorSettings)
+            }
+
             self.tableView.endUpdates()
 
             self.reloading = false
@@ -702,6 +725,31 @@ final class StatusTableViewController: LoopChartsTableViewController {
         case iob
         case dose
         case cob
+        case insulinEffect
+    }
+
+    // MARK: Insulin effect
+
+    private var insulinEffectAssessment = InsulinEffectAssessment.unknown(at: Date()) {
+        didSet {
+            let indexPath = IndexPath(row: ChartRow.insulinEffect.rawValue, section: Section.charts.rawValue)
+            if let cell = tableView.cellForRow(at: indexPath) as? InsulinEffectCell {
+                cell.configure(with: insulinEffectAssessment.level)
+            }
+        }
+    }
+
+    private final class InsulinEffectCell: UITableViewCell {
+        func configure(with level: InsulinEffectLevel) {
+            var content = defaultContentConfiguration()
+            content.text = NSLocalizedString("Insulin Effect", comment: "Title of the insulin effect screens and status row")
+            content.secondaryText = level.title(isEnabled: UserDefaults.standard.insulinEffectMonitorSettings.isEnabled)
+            content.secondaryTextProperties.color = level == .normal ? .secondaryLabel : level.color
+            content.image = UIImage(systemName: level.symbolName)
+            content.imageProperties.tintColor = level.color
+            contentConfiguration = content
+            accessoryType = .disclosureIndicator
+        }
     }
 
     // MARK: Glucose
@@ -1023,6 +1071,12 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
             return cell
         case .charts:
+            if ChartRow(rawValue: indexPath.row) == .insulinEffect {
+                let cell = tableView.dequeueReusableCell(withIdentifier: InsulinEffectCell.className, for: indexPath) as! InsulinEffectCell
+                cell.configure(with: insulinEffectAssessment.level)
+                return cell
+            }
+
             let cell = tableView.dequeueReusableCell(withIdentifier: ChartTableViewCell.className, for: indexPath) as! ChartTableViewCell
 
             switch ChartRow(rawValue: indexPath.row)! {
@@ -1047,6 +1101,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
                     return self?.statusCharts.cobChart(withFrame: frame)?.view
                 })
                 cell.setTitleLabelText(label: NSLocalizedString("Active Carbohydrates", comment: "The title of the Carbs On-Board graph"))
+            case .insulinEffect:
+                break
             }
 
             self.tableView(tableView, updateSubtitleFor: cell, at: indexPath)
@@ -1208,6 +1264,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 } else {
                     cell.setSubtitleLabel(label: nil)
                 }
+            case .insulinEffect:
+                break
             }
         case .hud, .status, .alertWarning:
             break
@@ -1229,6 +1287,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 return max(106, 0.37 * availableSize)
             case .iob, .dose, .cob:
                 return max(106, 0.21 * availableSize)
+            case .insulinEffect:
+                return UITableView.automaticDimension
             }
         case .hud, .status, .alertWarning:
             return UITableView.automaticDimension
@@ -1317,8 +1377,21 @@ final class StatusTableViewController: LoopChartsTableViewController {
                 performSegue(withIdentifier: InsulinDeliveryTableViewController.className, sender: indexPath)
             case .cob:
                 performSegue(withIdentifier: CarbAbsorptionViewController.className, sender: indexPath)
+            case .insulinEffect:
+                tableView.deselectRow(at: indexPath, animated: true)
+                presentInsulinEffectDetail()
             }
         }
+    }
+
+    private func presentInsulinEffectDetail() {
+        let detailView = InsulinEffectDetailView(assessment: insulinEffectAssessment)
+            .environmentObject(deviceManager.displayGlucosePreference)
+        let hostingController = DismissibleHostingController(content: detailView, isModalInPresentation: false, onDisappear: { [weak self] in
+            self?.refreshContext.update(with: .status)
+            self?.reloadData()
+        })
+        present(hostingController, animated: true)
     }
 
     private func presentUnmuteAlertConfirmation() {

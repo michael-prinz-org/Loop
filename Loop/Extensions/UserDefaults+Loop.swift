@@ -20,6 +20,7 @@ extension UserDefaults {
         case therapyProfiles = "com.loopkit.Loop.therapyProfiles"
         case activeTherapyProfileID = "com.loopkit.Loop.activeTherapyProfileID"
         case insulinConcentrationChanges = "com.loopkit.Loop.insulinConcentrationChanges"
+        case insulinEffectMonitorSettings = "com.loopkit.Loop.insulinEffectMonitorSettings"
     }
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {
@@ -152,6 +153,23 @@ extension UserDefaults {
                 set(data, forKey: Key.insulinConcentrationChanges.rawValue)
             } catch {
                 assertionFailure("Unable to encode insulin concentration changes")
+            }
+        }
+    }
+
+    var insulinEffectMonitorSettings: InsulinEffectMonitorSettings {
+        get {
+            guard let data = object(forKey: Key.insulinEffectMonitorSettings.rawValue) as? Data else {
+                return InsulinEffectMonitorSettings()
+            }
+            return (try? JSONDecoder().decode(InsulinEffectMonitorSettings.self, from: data)) ?? InsulinEffectMonitorSettings()
+        }
+        set {
+            do {
+                let data = try JSONEncoder().encode(newValue)
+                set(data, forKey: Key.insulinEffectMonitorSettings.rawValue)
+            } catch {
+                assertionFailure("Unable to encode insulin effect monitor settings")
             }
         }
     }

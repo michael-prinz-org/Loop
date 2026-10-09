@@ -212,7 +212,7 @@ final class WatchDataManager: NSObject {
             let enoughTimePassed = newGlucoseDate.timeIntervalSince(lastGlucoseDate) >= session.complicationUserInfoTransferInterval(bedtime: bedtime)
             let enoughTrendDrift = abs(newGlucose.doubleValue(for: minTrendUnit) - lastGlucose.doubleValue(for: minTrendUnit)) >= minTrendDrift
 
-            complicationShouldUpdate = enoughTimePassed || enoughTrendDrift
+            complicationShouldUpdate = enoughTimePassed || enoughTrendDrift || lastContext.insulinEffectLevel != context.insulinEffectLevel
         } else {
             complicationShouldUpdate = true
         }
@@ -244,6 +244,12 @@ final class WatchDataManager: NSObject {
             let updateGroup = DispatchGroup()
 
             let carbsOnBoard = state.carbsOnBoard
+            var insulinEffectInput = InsulinEffectMonitorInput(
+                now: Date(),
+                state: state,
+                insulinSensitivity: manager.insulinSensitivityScheduleApplyingOverrideHistory,
+                carbRatio: manager.carbRatioScheduleApplyingOverrideHistory
+            )
 
             let context = WatchContext(glucose: glucose, glucoseUnit: self.deviceManager.preferredGlucoseUnit)
             context.reservoir = reservoir?.unitVolume
@@ -289,6 +295,7 @@ final class WatchDataManager: NSObject {
                     case .success(let samples):
                         sample = samples.last
                         historicalGlucose = samples.filter { $0.startDate >= historicalGlucoseStartDate }.map { HistoricalGlucoseValue(startDate: $0.startDate, quantity: $0.quantity) }
+                        insulinEffectInput.readings = InsulinEffectMonitorInput.readings(from: samples, now: insulinEffectInput.now)
                     }
                     context.glucose = sample?.quantity
                     context.glucoseDate = sample?.startDate
@@ -340,6 +347,9 @@ final class WatchDataManager: NSObject {
             if let eventual = context.predictedGlucose?.values.last {
                 context.eventualGlucoseDisplayTier = settings.glucoseDisplayTier(forPredicted: eventual.quantity, at: eventual.startDate)
             }
+
+            let insulinEffectLevel = InsulinEffectMonitor.assess(insulinEffectInput, settings: UserDefaults.standard.insulinEffectMonitorSettings).level
+            context.insulinEffectLevel = insulinEffectLevel.isWarning ? insulinEffectLevel : nil
 
             var preMealOverride = settings.preMealOverride
             if preMealOverride?.hasFinished() == true {

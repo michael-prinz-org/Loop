@@ -38,6 +38,8 @@ final class WatchContext: RawRepresentable {
     /// Precomputed on the phone so the watch never evaluates thresholds or the correction range itself.
     var glucoseDisplayTier: GlucoseDisplayTier?
     var eventualGlucoseDisplayTier: GlucoseDisplayTier?
+    /// Only set while the insulin effect monitor warns.
+    var insulinEffectLevel: InsulinEffectLevel?
 
     var loopLastRunDate: Date?
     var loopInterval: TimeInterval?
@@ -119,6 +121,9 @@ final class WatchContext: RawRepresentable {
         if let rawTier = rawValue["egdt"] as? GlucoseDisplayTier.RawValue {
             eventualGlucoseDisplayTier = GlucoseDisplayTier(rawValue: rawTier)
         }
+        if let rawLevel = rawValue["iel"] as? InsulinEffectLevel.RawValue {
+            insulinEffectLevel = InsulinEffectLevel(rawValue: rawLevel)
+        }
     }
 
     var rawValue: RawValue {
@@ -153,6 +158,7 @@ final class WatchContext: RawRepresentable {
         raw["gs"] = glucoseSyncIdentifier
         raw["gdt"] = glucoseDisplayTier?.rawValue
         raw["egdt"] = eventualGlucoseDisplayTier?.rawValue
+        raw["iel"] = insulinEffectLevel?.rawValue
         raw["iob"] = iob
         raw["ld"] = loopLastRunDate
         raw["li"] = loopInterval

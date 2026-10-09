@@ -204,7 +204,7 @@ extension SettingsView {
         describedToggle(
             isOn: $viewModel.customLoopIntervalEnabled,
             title: Text("Custom pod communication interval", comment: "The title text for the custom loop interval switch cell"),
-            description: NSLocalizedString("Rate limit: caps how often Loop is allowed to contact the pod (dose syncs and background freshness syncs alike) to at most once per the interval below, in both foreground and background. It does not decide whether a sync happens, only how often — see Disable Pod Communication below to also skip syncs that aren't needed for a dose. Off keeps the standard loop cadence.", comment: "The description text for the custom loop interval switch cell")
+            description: NSLocalizedString("Rate limit: caps how often Loop is allowed to contact the pod (dose syncs and background freshness syncs alike) to at most once per the interval below, in both foreground and background. It does not decide whether a sync happens, only how often — see Skip Background Pod Syncs below to also skip syncs that aren't needed for a dose. Off keeps the standard loop cadence.", comment: "The description text for the custom loop interval switch cell")
         )
 
         VStack(alignment: .leading, spacing: 4) {
@@ -225,7 +225,7 @@ extension SettingsView {
 
         describedToggle(
             isOn: $viewModel.suppressPodCommunicationInBackground,
-            title: Text("Disable Pod Communication", comment: "The title text for the disable pod communication switch cell"),
+            title: Text("Skip Background Pod Syncs", comment: "The title text for the disable pod communication switch cell"),
             description: NSLocalizedString("Need filter: while the app is in the background, skips the routine sync Loop otherwise makes just to keep pod data fresh, so the pod is only contacted when a dose actually needs to be delivered. A required dose is never skipped. The app in the foreground is unaffected — freshness syncs continue there so status shown on screen stays current. With Closed Loop off there are no freshness syncs to skip, so this setting has no effect.", comment: "The description text for the disable pod communication switch cell")
         )
     }
@@ -327,6 +327,18 @@ extension SettingsView {
                             imageView: Image("Therapy Icon"),
                             label: NSLocalizedString("Therapy Settings", comment: "Title text for button to Therapy Settings"),
                             descriptiveText: NSLocalizedString("Diabetes Treatment", comment: "Descriptive text for Therapy Settings"))
+            }
+
+            NavigationLink(destination: InsulinEffectMonitorSettingsView().environmentObject(displayGlucosePreference)) {
+                LargeButton(action: { },
+                            includeArrow: false,
+                            imageView: Image(systemName: "exclamationmark.triangle")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .foregroundColor(.orange)
+                                .frame(width: 30),
+                            label: NSLocalizedString("Insulin Effect", comment: "Title of the insulin effect screens and status row"),
+                            descriptiveText: NSLocalizedString("Warns when insulin seems not to work", comment: "Descriptive text for the insulin effect monitor settings"))
             }
 
             ForEach(pluginMenuItems.filter {$0.section == .configuration}) { item in
