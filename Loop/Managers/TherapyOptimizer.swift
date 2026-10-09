@@ -3,7 +3,8 @@
 //  Loop
 //
 //  Autotune-style estimation of basal rates, insulin sensitivity and carb ratios.
-//  Display-only: nothing in here feeds into dosing.
+//  Never changes dosing by itself: calculated values only reach Loop when the user creates a profile
+//  from them and activates it.
 //
 
 import Foundation
@@ -168,8 +169,8 @@ struct TherapyOptimizerState: Codable, Equatable {
     var sensitivity: TherapyOptimizerValues
     /// g/U
     var carbRatio: TherapyOptimizerValues
-    /// Unit of the user's insulin sensitivity schedule, used for display and export
-    var sensitivityUnitString: String
+    /// Persisted form of `sensitivityUnit`
+    private var sensitivityUnitString: String
     var summaries: [TherapyOptimizerDaySummary] = []
     var overrideIntervals: [DateInterval] = []
     var lastProcessedDate: Date
@@ -180,15 +181,21 @@ struct TherapyOptimizerState: Codable, Equatable {
     /// One entry per `TherapyOptimizerEngine.glucoseRangeUpperBounds` range; display-only.
     var sensitivityByGlucose: [TherapyOptimizerGlucoseRangeSensitivity]?
 
-    init(startedAt: Date, timeZone: TimeZone, basal: [Double], sensitivity: [Double], carbRatio: [Double], sensitivityUnitString: String, processingStart: Date) {
+    /// All values are in U100 units.
+    init(startedAt: Date, timeZone: TimeZone, basal: [Double], sensitivity: [Double], carbRatio: [Double], sensitivityUnit: HKUnit, processingStart: Date) {
         self.startedAt = startedAt
         self.timeZone = timeZone
         self.basal = TherapyOptimizerValues(hourly: basal)
         self.sensitivity = TherapyOptimizerValues(hourly: sensitivity)
         self.carbRatio = TherapyOptimizerValues(hourly: carbRatio)
-        self.sensitivityUnitString = sensitivityUnitString
+        self.sensitivityUnitString = sensitivityUnit.unitString
         self.lastProcessedDate = processingStart
         self.mealCutoffDate = processingStart
+    }
+
+    /// Unit of the user's insulin sensitivity schedule, used for display and export
+    var sensitivityUnit: HKUnit {
+        HKUnit(from: sensitivityUnitString)
     }
 
     var calendar: Calendar {
@@ -236,6 +243,18 @@ enum TherapyOptimizerMath {
             items.append(RepeatingScheduleValue(startTime: TimeInterval(hour * 3600), value: value))
         }
         return items
+    }
+
+    /// Integral of an hourly rate over the range, in 5-minute steps.
+    static func units(from start: Date, to end: Date, rate: (Date) -> Double) -> Double {
+        var units = 0.0
+        var date = start
+        while date < end {
+            let next = min(end, date.addingTimeInterval(5 * 60))
+            units += rate(date) * next.timeIntervalSince(date) / 3600
+            date = next
+        }
+        return units
     }
 }
 
@@ -355,14 +374,7 @@ enum TherapyOptimizerEngine {
     }
 
     static func calculatedBasalUnits(from start: Date, to end: Date, state: TherapyOptimizerState, calendar: Calendar) -> Double {
-        var units = 0.0
-        var date = start
-        while date < end {
-            let next = min(end, date.addingTimeInterval(5 * 60))
-            units += state.basal.calculated[calendar.component(.hour, from: date)] * next.timeIntervalSince(date) / 3600
-            date = next
-        }
-        return units
+        TherapyOptimizerMath.units(from: start, to: end) { state.basal.calculated[calendar.component(.hour, from: $0)] }
     }
 
     private static func summaryIndex(for date: Date, calendar: Calendar, in state: inout TherapyOptimizerState) -> Int {
@@ -492,10 +504,6 @@ enum TherapyOptimizerEngine {
 // MARK: - Export
 
 extension TherapyOptimizerState {
-    var sensitivityUnit: HKUnit {
-        HKUnit(from: sensitivityUnitString)
-    }
-
     /// Converts mg/dL/U into the user's sensitivity unit.
     func displaySensitivity(_ milligramsPerDeciliter: Double) -> Double {
         HKQuantity(unit: .milligramsPerDeciliter, doubleValue: milligramsPerDeciliter).doubleValue(for: sensitivityUnit)

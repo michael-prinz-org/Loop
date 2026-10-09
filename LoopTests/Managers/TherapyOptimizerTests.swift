@@ -22,7 +22,7 @@ final class TherapyOptimizerTests: XCTestCase {
             basal: Array(repeating: basal, count: 24),
             sensitivity: Array(repeating: sensitivity, count: 24),
             carbRatio: Array(repeating: carbRatio, count: 24),
-            sensitivityUnitString: HKUnit.milligramsPerDeciliter.unitString,
+            sensitivityUnit: .milligramsPerDeciliter,
             processingStart: day0
         )
     }
@@ -275,6 +275,19 @@ final class TherapyOptimizerTests: XCTestCase {
 
         let values = state.calculatedBasalSchedule(maximumBasalRate: nil, maximumEntryCount: nil)?.items.map { $0.value }
         XCTAssertEqual(values, [Double(14) / 20, Double(15) / 20, Double(3) / 20, Double(14) / 20])
+    }
+
+    func testUnitsIntegratesHourlyRate() {
+        let units = TherapyOptimizerMath.units(from: day0, to: day0.addingTimeInterval(2 * hour + 150)) { $0 < self.day0.addingTimeInterval(self.hour) ? 1.2 : 0.6 }
+        XCTAssertEqual(units, 1.2 + 0.6 + 0.6 * 150 / 3600, accuracy: 0.0001)
+    }
+
+    func testStateWithConcentrationTimelineStillDecodes() throws {
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(makeState())) as! [String: Any]
+        json["concentrationTimeline"] = [["start": 0, "concentration": 200]]
+        let decoded = try JSONDecoder().decode(TherapyOptimizerState.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(decoded, makeState())
+        XCTAssertEqual(decoded.sensitivityUnit, .milligramsPerDeciliter)
     }
 
     func testStateRoundTripsThroughJSON() throws {

@@ -309,7 +309,7 @@ class GlucoseChartScene: SKScene {
                 historicalPath.move(to: scaler.point(previous.startDate, previous.quantity.doubleValue(for: unit)))
                 historicalPath.addLine(to: scaler.point(current.startDate, current.quantity.doubleValue(for: unit)))
                 let historicalPathNode = SKShapeNode(path: historicalPath)
-                historicalPathNode.strokeColor = chartColor(for: data.glucoseSettings.glucoseDisplayTier(for: current.quantity))
+                historicalPathNode.strokeColor = data.glucoseSettings.glucoseDisplayTier(for: current.quantity).chartColor
                 historicalPathNode.lineWidth = 1
                 historicalPathNode.zPosition = NodePlane.lines.zPosition
                 addChild(historicalPathNode)
@@ -322,7 +322,7 @@ class GlucoseChartScene: SKScene {
             let size = CGSize(width: 2, height: 2)
             let origin = CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2)
             let (sprite, created) = getSprite(forHash: $0.chartHashValue)
-            sprite.color = chartColor(for: data.glucoseSettings.glucoseDisplayTier(for: $0.quantity))
+            sprite.color = data.glucoseSettings.glucoseDisplayTier(for: $0.quantity).chartColor
             sprite.zPosition = NodePlane.values.zPosition
             sprite.move(to: CGRect(origin: origin, size: size).alignedToScreenScale(WKInterfaceDevice.current().screenScale), animated: !created)
             inactiveNodes.removeValue(forKey: $0.chartHashValue)
@@ -339,8 +339,7 @@ class GlucoseChartScene: SKScene {
                 predictedPath.addLine(to: scaler.point(current.startDate, current.quantity.doubleValue(for: unit)))
 
                 let predictedPathNode = SKShapeNode(path: predictedPath.copy(dashingWithPhase: 0, lengths: [5, 3]))
-                predictedPathNode.strokeColor = chartColor(for: data.glucoseSettings.glucoseDisplayTier(for: current.quantity))
-                    .withAlphaComponent(0.82)
+                predictedPathNode.strokeColor = data.glucoseSettings.glucoseDisplayTier(for: current.quantity).chartColor
                 predictedPathNode.lineWidth = 2
                 predictedPathNode.zPosition = NodePlane.values.zPosition
                 addChild(predictedPathNode)
@@ -363,17 +362,6 @@ class GlucoseChartScene: SKScene {
         inactiveNodes.forEach { hash, node in
             node.removeFromParent()
             nodes.removeValue(forKey: hash)
-        }
-    }
-
-    private func chartColor(for tier: GlucoseDisplayTier) -> UIColor {
-        switch tier {
-        case .inRange:
-            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 0.82)
-        case .outOfRange:
-            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 0.72)
-        case .urgent:
-            return UIColor(red: 1, green: 59 / 255, blue: 48 / 255, alpha: 0.78)
         }
     }
 

@@ -883,7 +883,8 @@ extension LoopDataManager {
                 isRecommended = false
             }
 
-            // Discard the tolerant preview so the real loop recomputes and re-enforces pump-data recency.
+            // Discard the tolerant preview: this also clears predictedGlucose (and through its didSet
+            // recommendedAutomaticDose), so nothing can read the preview and the real loop recomputes with recency enforced.
             self.clearCachedInsulinEffects()
 
             completion(isRecommended)

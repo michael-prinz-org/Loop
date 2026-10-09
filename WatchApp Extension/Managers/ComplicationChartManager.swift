@@ -193,7 +193,7 @@ final class ComplicationChartManager {
         historicalGlucose.forEach { glucose in
             let origin = scaler.point(for: glucose, unit: unit)
             let glucoseRect = CGRect(origin: origin, size: .glucosePoint).alignedToScreenScale(WKInterfaceDevice.current().screenScale)
-            context.setFillColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: glucose.quantity) ?? .inRange).cgColor)
+            context.setFillColor((data?.glucoseSettings.glucoseDisplayTier(for: glucose.quantity) ?? .inRange).chartColor.cgColor)
             context.fill(glucoseRect)
         }
     }
@@ -226,23 +226,12 @@ final class ComplicationChartManager {
             predictedPath.addLine(to: currentPoint)
 
             context.setLineDash(phase: dashPhase, lengths: predictionDashLengths)
-            context.setStrokeColor(Self.chartColor(for: data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).cgColor)
+            context.setStrokeColor((data?.glucoseSettings.glucoseDisplayTier(for: current.quantity) ?? .inRange).chartColor.cgColor)
             context.addPath(predictedPath)
             context.strokePath()
 
             dashPhase += hypot(currentPoint.x - previousPoint.x, currentPoint.y - previousPoint.y)
         }
         context.setLineDash(phase: 0, lengths: [])
-    }
-
-    private static func chartColor(for tier: GlucoseDisplayTier) -> UIColor {
-        switch tier {
-        case .inRange:
-            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 0.82)
-        case .outOfRange:
-            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 0.72)
-        case .urgent:
-            return UIColor(red: 1, green: 59 / 255, blue: 48 / 255, alpha: 0.78)
-        }
     }
 }

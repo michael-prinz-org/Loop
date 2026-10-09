@@ -25,7 +25,7 @@ struct CalculatedProfileView: View {
 
     var body: some View {
         List {
-            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides, lows or unannounced meals. The values are only displayed and never change dosing. Use them by creating a profile and activating it yourself.", comment: "Footer explaining the calculated therapy profile"))) {
+            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides, lows or unannounced meals. All values are U100; data from times a U200 profile was active is converted automatically. The values are only displayed and never change dosing. Use them by creating a profile and activating it yourself.", comment: "Footer explaining the calculated therapy profile"))) {
                 Toggle(NSLocalizedString("Calculate Profile", comment: "Toggle that enables the therapy optimizer"), isOn: Binding(
                     get: { optimizer.state != nil },
                     set: { enabled in
@@ -141,10 +141,10 @@ struct CalculatedProfileView: View {
         return Section(
             header: VStack(alignment: .leading, spacing: 2) {
                 Text(NSLocalizedString("Insulin Sensitivity by Glucose", comment: "Header of the insulin sensitivity by glucose range table"))
-                Text(NSLocalizedString("Glucose · Factor · Sensitivity · Days", comment: "Column legend of the insulin sensitivity by glucose range table"))
+                Text(NSLocalizedString("Glucose · Change · Sensitivity · Days", comment: "Column legend of the insulin sensitivity by glucose range table"))
                     .font(.caption2)
             },
-            footer: Text(NSLocalizedString("Factor relative to your overall insulin sensitivity: below 1 means insulin works less in that range. Information only; Loop cannot use it for dosing.", comment: "Footer of the insulin sensitivity by glucose range table"))
+            footer: Text(NSLocalizedString("Change relative to your overall insulin sensitivity, e.g. −15 % means insulin works 15 % less in that range. The percentage can be applied to any 24-hour profile. Information only; Loop does not use it for dosing.", comment: "Footer of the insulin sensitivity by glucose range table"))
         ) {
             ForEach(0..<TherapyOptimizerEngine.glucoseRangeCount, id: \.self) { range in
                 glucoseRangeRow(glucoseRangeLabel(range, bounds: bounds), range: range < ranges.count ? ranges[range] : nil, state: state, format: format)
@@ -168,7 +168,7 @@ struct CalculatedProfileView: View {
             Text(title)
                 .frame(width: 80, alignment: .leading)
             Spacer()
-            Text(range?.factor.map { String(format: "×%.2f", $0) } ?? "–")
+            Text(range?.factor.map { String(format: "%+.0f %%", ($0 - 1) * 100) } ?? "–")
                 .bold()
                 .frame(minWidth: 56, alignment: .trailing)
             Text(range?.sensitivity.map { String(format: format, state.displaySensitivity($0)) } ?? "–")
@@ -244,7 +244,7 @@ private struct CreateCalculatedProfileSheet: View {
                 Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
                     TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
                 }
-                Section(footer: Text(NSLocalizedString("Parts that are not taken are copied from your current therapy settings.", comment: "Footer of the create-from-calculated sheet"))) {
+                Section(footer: Text(NSLocalizedString("The new profile is a U100 profile; use “Create U200 Profile” on it for U200. Parts that are not taken are copied from the active profile (in U100 values).", comment: "Footer of the create-from-calculated sheet"))) {
                     Toggle(NSLocalizedString("Basal Rates", comment: "Therapy profile basal rates row"), isOn: $includeBasal)
                     Toggle(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"), isOn: $includeSensitivity)
                     if includeSensitivity {
@@ -286,18 +286,22 @@ private struct CreateCalculatedProfileSheet: View {
     }
 
     private func create() {
+        // Calculated values are U100; parts not taken come from the active profile, converted to U100 if needed.
+        let base = profiles.activeProfileInU100
         let live = profiles.liveViewModel.therapySettings
+        let maximumBasalRate = base?.maximumBasalRatePerHour ?? live.maximumBasalRatePerHour
         let basal = includeBasal
-            ? state.calculatedBasalSchedule(maximumBasalRate: live.maximumBasalRatePerHour, maximumEntryCount: profiles.liveViewModel.maximumBasalScheduleEntryCount)
-            : live.basalRateSchedule
-        let sensitivity = includeSensitivity ? state.calculatedSensitivitySchedule(hourly: hourlySensitivity) : live.insulinSensitivitySchedule
-        let carbRatio = includeCarbRatio ? state.calculatedCarbRatioSchedule(hourly: hourlyCarbRatio) : live.carbRatioSchedule
+            ? state.calculatedBasalSchedule(maximumBasalRate: maximumBasalRate, maximumEntryCount: profiles.liveViewModel.maximumBasalScheduleEntryCount)
+            : base?.basalRateSchedule
+        let sensitivity = includeSensitivity ? state.calculatedSensitivitySchedule(hourly: hourlySensitivity) : base?.insulinSensitivitySchedule
+        let carbRatio = includeCarbRatio ? state.calculatedCarbRatioSchedule(hourly: hourlyCarbRatio) : base?.carbRatioSchedule
 
         guard let basal = basal, let sensitivity = sensitivity, let carbRatio = carbRatio else {
             errorMessage = NSLocalizedString("The profile could not be created.", comment: "Error when a profile cannot be created from calculated values")
             return
         }
-        profiles.addProfile(name: name, basalRateSchedule: basal, carbRatioSchedule: carbRatio, insulinSensitivitySchedule: sensitivity)
+        profiles.addProfile(name: name, basalRateSchedule: basal, carbRatioSchedule: carbRatio, insulinSensitivitySchedule: sensitivity,
+                            maximumBasalRatePerHour: maximumBasalRate, maximumBolus: base?.maximumBolus ?? live.maximumBolus)
         presentationMode.wrappedValue.dismiss()
     }
 }

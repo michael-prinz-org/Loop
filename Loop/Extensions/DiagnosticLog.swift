@@ -182,6 +182,8 @@ final class InAppLogStore: ObservableObject {
 
     private let lock = NSLock()
     private var storage: [InAppLogEntry] = []
+    /// Index of the oldest entry once `storage` is full; new entries overwrite it.
+    private var oldestIndex = 0
     private var updateScheduled = false
     private var capturing: Bool
 
@@ -211,9 +213,11 @@ final class InAppLogStore: ObservableObject {
         let entry = InAppLogEntry(date: date, level: InAppLogLevel(type), category: category, message: message)
 
         lock.lock()
-        storage.append(entry)
-        if storage.count > Self.maximumEntryCount {
-            storage.removeFirst(storage.count - Self.maximumEntryCount)
+        if storage.count < Self.maximumEntryCount {
+            storage.append(entry)
+        } else {
+            storage[oldestIndex] = entry
+            oldestIndex = (oldestIndex + 1) % Self.maximumEntryCount
         }
         let alreadyScheduled = updateScheduled
         updateScheduled = true
@@ -233,7 +237,7 @@ final class InAppLogStore: ObservableObject {
     /// A snapshot of all retained entries, oldest first.
     func allEntries() -> [InAppLogEntry] {
         lock.lock(); defer { lock.unlock() }
-        return storage
+        return Array(storage[oldestIndex...] + storage[..<oldestIndex])
     }
 
     /// The distinct categories present in the buffer, sorted alphabetically.
@@ -245,6 +249,7 @@ final class InAppLogStore: ObservableObject {
     func clear() {
         lock.lock()
         storage.removeAll(keepingCapacity: true)
+        oldestIndex = 0
         lock.unlock()
         objectWillChange.send()
     }

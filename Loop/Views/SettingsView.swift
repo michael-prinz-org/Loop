@@ -1097,7 +1097,7 @@ private struct TherapySettingsScreen: View {
         TherapySettingsView(
             mode: .settings,
             viewModel: bridge.displayViewModel,
-            headerContent: bridge.isStandardActive ? nil : AnyView(standardNotice),
+            headerContent: AnyView(activeProfileHeader),
             additionalContent: AnyView(GlucoseRangeCard(range: $glucoseDisplayRange).environmentObject(displayGlucosePreference))
         )
         .onAppear {
@@ -1113,22 +1113,27 @@ private struct TherapySettingsScreen: View {
         }
     }
 
-    private var standardNotice: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "info.circle.fill")
-                .foregroundColor(.accentColor)
-            Text(bridge.activeProfileName.map {
-                String(format: NSLocalizedString("Profile “%@” is active and Loop uses its values. Basal rates, carb ratios and insulin sensitivities shown here belong to Standard; changes only affect Standard.", comment: "Notice in Therapy Settings while another therapy profile is active (1: profile name)"), $0)
-            } ?? NSLocalizedString("Loop uses settings that differ from Standard. Basal rates, carb ratios and insulin sensitivities shown here belong to Standard; changes only affect Standard.", comment: "Notice in Therapy Settings while the live settings match no profile"))
-                .font(.footnote)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+    private var activeProfileHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(NSLocalizedString("Active Profile", comment: "Label of the active therapy profile in Therapy Settings"))
+                    .font(.headline)
+                Spacer()
+                Text(bridge.activeProfileName ?? NSLocalizedString("Standard", comment: "Name of the protected standard therapy profile"))
+                    .foregroundColor(bridge.isStandardActive ? .secondary : .orange)
+            }
+            if !bridge.isStandardActive {
+                Text(NSLocalizedString("Loop uses the values of this profile. Basal rates, carb ratios, insulin sensitivities and delivery limits shown below belong to Standard; changes only affect Standard.", comment: "Notice in Therapy Settings while another therapy profile is active"))
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
 
-/// Shows the live therapy settings with basal rates, carb ratios and insulin sensitivities taken from the
-/// Standard profile. Edits of those three always update Standard and only reach Loop while Standard is active.
+/// Shows the live therapy settings with basal rates, carb ratios, insulin sensitivities and delivery limits taken
+/// from the Standard profile. Edits of those always update Standard and only reach Loop while Standard is active.
 final class StandardTherapySettingsBridge: ObservableObject, TherapySettingsViewModelDelegate {
     let liveViewModel: TherapySettingsViewModel
     private let sensitivityOverridesEnabled: Bool
@@ -1154,22 +1159,26 @@ final class StandardTherapySettingsBridge: ObservableObject, TherapySettingsView
     }
 
     func reload() {
-        let live = liveViewModel.therapySettings
-        var display = live
+        var display = liveViewModel.therapySettings
         if let standard = standard {
-            display.basalRateSchedule = standard.basalRateSchedule
-            display.carbRatioSchedule = standard.carbRatioSchedule
-            display.insulinSensitivitySchedule = standard.insulinSensitivitySchedule
-            isStandardActive = standard.matches(live)
+            standard.write(into: &display)
+            let active = TherapyProfile.activeProfile()
+            isStandardActive = active?.isStandardProfile != false
+            activeProfileName = active?.displayName
         } else {
             isStandardActive = true
+            activeProfileName = nil
         }
-        activeProfileName = isStandardActive ? nil : UserDefaults.standard.therapyProfiles.first { $0.matches(live) }?.name
         displayViewModel.therapySettings = display
     }
 
+    private var isStandardActiveNow: Bool {
+        guard standard != nil else { return true }
+        return TherapyProfile.activeProfile()?.isStandardProfile != false
+    }
+
     func syncBasalRateSchedule(items: [RepeatingScheduleValue<Double>], completion: @escaping (Swift.Result<BasalRateSchedule, Error>) -> Void) {
-        if standard?.matches(liveViewModel.therapySettings) ?? true {
+        if isStandardActiveNow {
             liveViewModel.syncBasalRateSchedule(items: items, completion: completion)
         } else if let schedule = BasalRateSchedule(dailyItems: items, timeZone: liveViewModel.therapySettings.basalRateSchedule?.timeZone) {
             completion(.success(schedule))
@@ -1179,29 +1188,27 @@ final class StandardTherapySettingsBridge: ObservableObject, TherapySettingsView
     }
 
     func syncDeliveryLimits(deliveryLimits: DeliveryLimits, completion: @escaping (Swift.Result<DeliveryLimits, Error>) -> Void) {
-        liveViewModel.syncDeliveryLimits(deliveryLimits: deliveryLimits, completion: completion)
+        if isStandardActiveNow {
+            liveViewModel.syncDeliveryLimits(deliveryLimits: deliveryLimits, completion: completion)
+        } else {
+            completion(.success(deliveryLimits))
+        }
     }
 
     func saveCompletion(therapySettings: TherapySettings) {
         let live = liveViewModel.therapySettings
         var newLive = therapySettings
+        let wasActive = isStandardActiveNow
         var profiles = UserDefaults.standard.therapyProfiles
         if let index = profiles.firstIndex(where: { $0.isStandardProfile }) {
-            let wasActive = profiles[index].matches(live)
-            if let basalRates = therapySettings.basalRateSchedule {
-                profiles[index].basalRateSchedule = basalRates
-            }
-            if let carbRatios = therapySettings.carbRatioSchedule {
-                profiles[index].carbRatioSchedule = carbRatios
-            }
-            if let sensitivities = therapySettings.insulinSensitivitySchedule {
-                profiles[index].insulinSensitivitySchedule = sensitivities
-            }
+            profiles[index].read(from: therapySettings)
             UserDefaults.standard.therapyProfiles = profiles
             if !wasActive {
                 newLive.basalRateSchedule = live.basalRateSchedule
                 newLive.carbRatioSchedule = live.carbRatioSchedule
                 newLive.insulinSensitivitySchedule = live.insulinSensitivitySchedule
+                newLive.maximumBasalRatePerHour = live.maximumBasalRatePerHour
+                newLive.maximumBolus = live.maximumBolus
             }
         }
 
@@ -1239,34 +1246,146 @@ extension TherapyProfile {
         isStandard == true
     }
 
-    func matches(_ settings: TherapySettings) -> Bool {
-        settings.basalRateSchedule == basalRateSchedule
-            && settings.carbRatioSchedule == carbRatioSchedule
-            && settings.insulinSensitivitySchedule == insulinSensitivitySchedule
+    var concentration: InsulinConcentration {
+        insulinConcentration ?? .u100
+    }
+
+    var isConcentrated: Bool {
+        concentration != .u100
+    }
+
+    var displayName: String {
+        isConcentrated ? "\(name) (\(concentration.label))" : name
+    }
+
+    init?(name: String, settings: TherapySettings, isStandard: Bool? = nil, insulinConcentration: InsulinConcentration? = nil) {
+        guard let basalRates = settings.basalRateSchedule,
+              let carbRatios = settings.carbRatioSchedule,
+              let sensitivities = settings.insulinSensitivitySchedule else {
+            return nil
+        }
+        self.init(
+            name: name,
+            basalRateSchedule: basalRates,
+            carbRatioSchedule: carbRatios,
+            insulinSensitivitySchedule: sensitivities,
+            isStandard: isStandard,
+            maximumBasalRatePerHour: settings.maximumBasalRatePerHour,
+            maximumBolus: settings.maximumBolus,
+            insulinConcentration: insulinConcentration
+        )
+    }
+
+    /// Copies everything a profile holds into `settings`; missing delivery limits leave the current ones in place.
+    func write(into settings: inout TherapySettings) {
+        settings.basalRateSchedule = basalRateSchedule
+        settings.carbRatioSchedule = carbRatioSchedule
+        settings.insulinSensitivitySchedule = insulinSensitivitySchedule
+        if let maximumBasalRatePerHour = maximumBasalRatePerHour {
+            settings.maximumBasalRatePerHour = maximumBasalRatePerHour
+        }
+        if let maximumBolus = maximumBolus {
+            settings.maximumBolus = maximumBolus
+        }
+    }
+
+    mutating func read(from settings: TherapySettings) {
+        if let basalRates = settings.basalRateSchedule {
+            basalRateSchedule = basalRates
+        }
+        if let carbRatios = settings.carbRatioSchedule {
+            carbRatioSchedule = carbRatios
+        }
+        if let sensitivities = settings.insulinSensitivitySchedule {
+            insulinSensitivitySchedule = sensitivities
+        }
+        maximumBasalRatePerHour = settings.maximumBasalRatePerHour ?? maximumBasalRatePerHour
+        maximumBolus = settings.maximumBolus ?? maximumBolus
+    }
+
+    /// Same insulin effect with another concentration: basal and limits scale with 1/factor (rounded to 0.05),
+    /// carb ratios and insulin sensitivities with the factor (e.g. U100 → U200: halve / double).
+    func converted(toConcentration target: InsulinConcentration, name: String) -> TherapyProfile? {
+        let factor = target.unitsPerPumpUnit / concentration.unitsPerPumpUnit
+        let pumpUnits: (Double) -> Double = { ($0 / factor * 20).rounded() / 20 }
+        let limit: (Double) -> Double = { ($0 / factor * 20 + 1e-9).rounded(.down) / 20 }
+        // Keep values on the editors' picker grids (0.1 g/U; 1 mg/dL or 0.1 mmol/L).
+        let carbRatio: (Double) -> Double = { ($0 * factor * 10).rounded() / 10 }
+        let sensitivityStepsPerUnit = insulinSensitivitySchedule.unit == .milligramsPerDeciliter ? 1.0 : 10.0
+        let sensitivity: (Double) -> Double = { ($0 * factor * sensitivityStepsPerUnit).rounded() / sensitivityStepsPerUnit }
+        guard let basalRates = BasalRateSchedule(
+                dailyItems: basalRateSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: pumpUnits($0.value)) },
+                timeZone: basalRateSchedule.timeZone),
+              let carbRatios = CarbRatioSchedule(
+                unit: carbRatioSchedule.unit,
+                dailyItems: carbRatioSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: carbRatio($0.value)) },
+                timeZone: carbRatioSchedule.timeZone),
+              let sensitivities = InsulinSensitivitySchedule(
+                unit: insulinSensitivitySchedule.unit,
+                dailyItems: insulinSensitivitySchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: sensitivity($0.value)) },
+                timeZone: insulinSensitivitySchedule.timeZone) else {
+            return nil
+        }
+        return TherapyProfile(
+            name: name,
+            basalRateSchedule: basalRates,
+            carbRatioSchedule: carbRatios,
+            insulinSensitivitySchedule: sensitivities,
+            maximumBasalRatePerHour: maximumBasalRatePerHour.map(limit),
+            maximumBolus: maximumBolus.map(limit),
+            insulinConcentration: target == .u100 ? nil : target
+        )
     }
 
     /// Returns the stored Standard profile, creating it from `settings` the first time.
     @discardableResult
     static func ensureStandard(from settings: TherapySettings) -> TherapyProfile? {
         var profiles = UserDefaults.standard.therapyProfiles
-        if let standard = profiles.first(where: { $0.isStandardProfile }) {
-            return standard
+        defer {
+            migrateActiveProfileIfNeeded(liveSettings: settings)
         }
-        guard let basalRates = settings.basalRateSchedule,
-              let carbRatios = settings.carbRatioSchedule,
-              let sensitivities = settings.insulinSensitivitySchedule else {
+        if let index = profiles.firstIndex(where: { $0.isStandardProfile }) {
+            // Standard profiles saved before delivery limits were part of profiles take the current ones once.
+            if profiles[index].maximumBasalRatePerHour == nil || profiles[index].maximumBolus == nil {
+                profiles[index].maximumBasalRatePerHour = profiles[index].maximumBasalRatePerHour ?? settings.maximumBasalRatePerHour
+                profiles[index].maximumBolus = profiles[index].maximumBolus ?? settings.maximumBolus
+                UserDefaults.standard.therapyProfiles = profiles
+            }
+            return profiles[index]
+        }
+        guard let standard = TherapyProfile(
+            name: NSLocalizedString("Standard", comment: "Name of the protected standard therapy profile"),
+            settings: settings,
+            isStandard: true
+        ) else {
             return nil
         }
-        let standard = TherapyProfile(
-            name: NSLocalizedString("Standard", comment: "Name of the protected standard therapy profile"),
-            basalRateSchedule: basalRates,
-            carbRatioSchedule: carbRatios,
-            insulinSensitivitySchedule: sensitivities,
-            isStandard: true
-        )
         profiles.insert(standard, at: 0)
         UserDefaults.standard.therapyProfiles = profiles
         return standard
+    }
+
+    /// The single active profile; Standard when nothing else has been activated.
+    static func activeProfile() -> TherapyProfile? {
+        let profiles = UserDefaults.standard.therapyProfiles
+        if let id = UserDefaults.standard.activeTherapyProfileID, let active = profiles.first(where: { $0.id == id }) {
+            return active
+        }
+        return profiles.first { $0.isStandardProfile }
+    }
+
+    /// Before the active profile was stored, it was whichever profile equalled Loop's settings; carry that over once so
+    /// Therapy Settings never treats Standard as active while Loop (and the pod) still run another profile.
+    private static func migrateActiveProfileIfNeeded(liveSettings: TherapySettings) {
+        guard UserDefaults.standard.activeTherapyProfileID == nil else { return }
+        let profiles = UserDefaults.standard.therapyProfiles
+        let isLive: (TherapyProfile) -> Bool = {
+            $0.basalRateSchedule == liveSettings.basalRateSchedule
+                && $0.carbRatioSchedule == liveSettings.carbRatioSchedule
+                && $0.insulinSensitivitySchedule == liveSettings.insulinSensitivitySchedule
+        }
+        let active = profiles.first { $0.isStandardProfile && isLive($0) } ?? profiles.first(where: isLive) ?? profiles.first { $0.isStandardProfile }
+        UserDefaults.standard.activeTherapyProfileID = active?.id
     }
 }
 
@@ -1290,33 +1409,48 @@ final class TherapyProfilesModel: ObservableObject {
     }
 
     func isActive(_ profile: TherapyProfile) -> Bool {
-        profile.matches(liveViewModel.therapySettings)
+        TherapyProfile.activeProfile()?.id == profile.id
+    }
+
+    var standardProfile: TherapyProfile? {
+        profiles.first { $0.isStandardProfile }
     }
 
     func addProfileFromCurrentSettings() -> TherapyProfile? {
-        let live = liveViewModel.therapySettings
-        guard let basalRates = live.basalRateSchedule,
-              let carbRatios = live.carbRatioSchedule,
-              let sensitivities = live.insulinSensitivitySchedule else {
+        guard let profile = TherapyProfile(
+            name: String(format: NSLocalizedString("Profile %d", comment: "Default name of a new therapy profile (1: profile number)"), profiles.count + 1),
+            settings: liveViewModel.therapySettings,
+            insulinConcentration: TherapyProfile.activeProfile()?.insulinConcentration
+        ) else {
             return nil
         }
-        let profile = TherapyProfile(
-            name: String(format: NSLocalizedString("Profile %d", comment: "Default name of a new therapy profile (1: profile number)"), profiles.count + 1),
-            basalRateSchedule: basalRates,
-            carbRatioSchedule: carbRatios,
-            insulinSensitivitySchedule: sensitivities
-        )
         persist(profiles + [profile])
         return profile
     }
 
-    func addProfile(name: String, basalRateSchedule: BasalRateSchedule, carbRatioSchedule: CarbRatioSchedule, insulinSensitivitySchedule: InsulinSensitivitySchedule) {
+    func addProfile(name: String, basalRateSchedule: BasalRateSchedule, carbRatioSchedule: CarbRatioSchedule, insulinSensitivitySchedule: InsulinSensitivitySchedule, maximumBasalRatePerHour: Double?, maximumBolus: Double?) {
         persist(profiles + [TherapyProfile(
             name: name,
             basalRateSchedule: basalRateSchedule,
             carbRatioSchedule: carbRatioSchedule,
-            insulinSensitivitySchedule: insulinSensitivitySchedule
+            insulinSensitivitySchedule: insulinSensitivitySchedule,
+            maximumBasalRatePerHour: maximumBasalRatePerHour,
+            maximumBolus: maximumBolus
         )])
+    }
+
+    /// The active profile in U100 values, used as the base for profiles created from calculated (U100) values.
+    var activeProfileInU100: TherapyProfile? {
+        guard let active = TherapyProfile.activeProfile() else { return nil }
+        return active.isConcentrated ? active.converted(toConcentration: .u100, name: active.name) : active
+    }
+
+    func addU200Copy(of profile: TherapyProfile) -> TherapyProfile? {
+        guard let copy = profile.converted(toConcentration: .u200, name: String(format: NSLocalizedString("%@ U200", comment: "Name of a U200 copy of a therapy profile (1: original name)"), profile.name)) else {
+            return nil
+        }
+        persist(profiles + [copy])
+        return copy
     }
 
     func save(_ profile: TherapyProfile) {
@@ -1325,38 +1459,84 @@ final class TherapyProfilesModel: ObservableObject {
 
     func delete(atOffsets offsets: IndexSet) {
         var updated = profiles
-        let removable = IndexSet(offsets.filter { !profiles[$0].isStandardProfile })
+        let removable = IndexSet(offsets.filter { !profiles[$0].isStandardProfile && !isActive(profiles[$0]) })
         updated.remove(atOffsets: removable)
         persist(updated)
     }
 
-    /// Sends the profile's basal rates to the pump, then makes all three schedules the live therapy settings.
+    /// Transfers the whole profile: delivery limits and basal rates to the pump, then all values into Loop's settings.
     func activate(_ profile: TherapyProfile, completion: @escaping (Error?) -> Void) {
-        if let maximum = liveViewModel.therapySettings.maximumBasalRatePerHour,
+        let live = liveViewModel.therapySettings
+        if let maximum = profile.maximumBasalRatePerHour ?? live.maximumBasalRatePerHour,
            profile.basalRateSchedule.items.contains(where: { $0.value > maximum + 1e-9 }) {
             completion(TherapyProfileError.basalRateAboveMaximum(maximum))
             return
         }
+        let limits = DeliveryLimits(
+            maximumBasalRate: (profile.maximumBasalRatePerHour ?? live.maximumBasalRatePerHour).map { HKQuantity(unit: DoseEntry.unitsPerHour, doubleValue: $0) },
+            maximumBolus: (profile.maximumBolus ?? live.maximumBolus).map { HKQuantity(unit: .internationalUnit(), doubleValue: $0) }
+        )
+        let previousLimits = DeliveryLimits(
+            maximumBasalRate: live.maximumBasalRatePerHour.map { HKQuantity(unit: DoseEntry.unitsPerHour, doubleValue: $0) },
+            maximumBolus: live.maximumBolus.map { HKQuantity(unit: .internationalUnit(), doubleValue: $0) }
+        )
+        liveViewModel.syncDeliveryLimits(deliveryLimits: limits) { limitsResult in
+            DispatchQueue.main.async {
+                switch limitsResult {
+                case .failure(let error):
+                    completion(error)
+                case .success(let syncedLimits):
+                    self.syncBasalRatesAndApply(profile, syncedLimits: syncedLimits, previousLimits: previousLimits, completion: completion)
+                }
+            }
+        }
+    }
+
+    private func syncBasalRatesAndApply(_ profile: TherapyProfile, syncedLimits: DeliveryLimits, previousLimits: DeliveryLimits, completion: @escaping (Error?) -> Void) {
         liveViewModel.syncBasalRateSchedule(items: profile.basalRateSchedule.items) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let syncedSchedule):
                     var activated = profile
                     activated.basalRateSchedule = syncedSchedule
+                    let previousConcentration = TherapyProfile.activeProfile()?.concentration ?? .u100
                     self.save(activated)
+                    UserDefaults.standard.activeTherapyProfileID = activated.id
+                    // Before `apply`, so the effect caches it invalidates are rebuilt with rescaled dose history.
+                    InsulinConcentrationHistory.record(activated.concentration, previous: previousConcentration)
                     self.apply(activated)
                     completion(nil)
                 case .failure(let error):
-                    completion(error)
+                    self.restoreDeliveryLimits(previousLimits, pumpLimits: syncedLimits) {
+                        completion(error)
+                    }
                 }
+            }
+        }
+    }
+
+    /// Puts the pump's limits back; if the pump refuses, Loop takes over the pump's limits so both always agree.
+    private func restoreDeliveryLimits(_ previousLimits: DeliveryLimits, pumpLimits: DeliveryLimits, completion: @escaping () -> Void) {
+        liveViewModel.syncDeliveryLimits(deliveryLimits: previousLimits) { result in
+            DispatchQueue.main.async {
+                if case .failure = result {
+                    self.liveViewModel.saveDeliveryLimits(limits: pumpLimits)
+                    if var active = TherapyProfile.activeProfile() {
+                        active.maximumBasalRatePerHour = pumpLimits.maximumBasalRate?.doubleValue(for: DoseEntry.unitsPerHour)
+                        active.maximumBolus = pumpLimits.maximumBolus?.doubleValue(for: .internationalUnit())
+                        self.save(active)
+                    }
+                }
+                completion()
             }
         }
     }
 
     /// Writes the profile into the live therapy settings without talking to the pump.
     func apply(_ profile: TherapyProfile) {
-        liveViewModel.therapySettings.carbRatioSchedule = profile.carbRatioSchedule
-        liveViewModel.therapySettings.insulinSensitivitySchedule = profile.insulinSensitivitySchedule
+        var settings = liveViewModel.therapySettings
+        profile.write(into: &settings)
+        liveViewModel.therapySettings = settings
         liveViewModel.saveBasalRates(basalRates: profile.basalRateSchedule)
     }
 
@@ -1382,14 +1562,16 @@ final class TherapyProfileEditorModel: ObservableObject, TherapySettingsViewMode
     func reload() {
         guard let profile = profiles.profile(withID: profileID) else { return }
         var settings = profiles.liveViewModel.therapySettings
-        settings.basalRateSchedule = profile.basalRateSchedule
-        settings.carbRatioSchedule = profile.carbRatioSchedule
-        settings.insulinSensitivitySchedule = profile.insulinSensitivitySchedule
+        profile.write(into: &settings)
         viewModel.therapySettings = settings
     }
 
+    private var isProfileActive: Bool {
+        profiles.profile(withID: profileID).map { profiles.isActive($0) } ?? false
+    }
+
     func syncBasalRateSchedule(items: [RepeatingScheduleValue<Double>], completion: @escaping (Swift.Result<BasalRateSchedule, Error>) -> Void) {
-        if let profile = profiles.profile(withID: profileID), profiles.isActive(profile) {
+        if isProfileActive {
             profiles.liveViewModel.syncBasalRateSchedule(items: items, completion: completion)
         } else if let schedule = BasalRateSchedule(dailyItems: items, timeZone: viewModel.therapySettings.basalRateSchedule?.timeZone) {
             completion(.success(schedule))
@@ -1399,20 +1581,19 @@ final class TherapyProfileEditorModel: ObservableObject, TherapySettingsViewMode
     }
 
     func syncDeliveryLimits(deliveryLimits: DeliveryLimits, completion: @escaping (Swift.Result<DeliveryLimits, Error>) -> Void) {
-        completion(.success(deliveryLimits))
+        if isProfileActive {
+            profiles.liveViewModel.syncDeliveryLimits(deliveryLimits: deliveryLimits, completion: completion)
+        } else {
+            completion(.success(deliveryLimits))
+        }
     }
 
     func saveCompletion(therapySettings: TherapySettings) {
-        guard var profile = profiles.profile(withID: profileID),
-              let basalRates = therapySettings.basalRateSchedule,
-              let carbRatios = therapySettings.carbRatioSchedule,
-              let sensitivities = therapySettings.insulinSensitivitySchedule else {
+        guard var profile = profiles.profile(withID: profileID) else {
             return
         }
         let wasActive = profiles.isActive(profile)
-        profile.basalRateSchedule = basalRates
-        profile.carbRatioSchedule = carbRatios
-        profile.insulinSensitivitySchedule = sensitivities
+        profile.read(from: therapySettings)
         profiles.save(profile)
         if wasActive {
             profiles.apply(profile)
@@ -1441,6 +1622,19 @@ struct TherapyProfilesView: View {
                                    selection: $selectedProfileID) {
                         HStack {
                             Text(profile.name)
+                            if profile.isStandardProfile {
+                                Image(systemName: "lock.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            if profile.isConcentrated {
+                                Text(profile.concentration.label)
+                                    .font(.caption.bold())
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.orange))
+                            }
                             Spacer()
                             if model.isActive(profile) {
                                 Text(NSLocalizedString("Active", comment: "Marker for the therapy profile matching the current therapy settings"))
@@ -1448,7 +1642,7 @@ struct TherapyProfilesView: View {
                             }
                         }
                     }
-                    .deleteDisabled(profile.isStandardProfile)
+                    .deleteDisabled(profile.isStandardProfile || model.isActive(profile))
                 }
                 .onDelete(perform: model.delete(atOffsets:))
             }
@@ -1475,13 +1669,14 @@ struct TherapyProfileDetailView: View {
         case basalRates
         case carbRatios
         case insulinSensitivities
+        case deliveryLimits
     }
 
     @ObservedObject var profiles: TherapyProfilesModel
     @StateObject private var editor: TherapyProfileEditorModel
     @State private var name: String
     @State private var activeEditor: Editor?
-    @State private var showActivateConfirmation = false
+    @State private var activationTarget: TherapyProfile?
     @State private var isActivating = false
     @State private var activationErrorMessage: String?
 
@@ -1518,30 +1713,47 @@ struct TherapyProfileDetailView: View {
                                selection: $activeEditor) {
                     Text(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"))
                 }
+                if editor.viewModel.pumpSupportedIncrements() != nil {
+                    NavigationLink(destination: DeliveryLimitsEditor(mode: .settings, therapySettingsViewModel: editor.viewModel, didSave: closeEditor),
+                                   tag: Editor.deliveryLimits,
+                                   selection: $activeEditor) {
+                        Text(NSLocalizedString("Delivery Limits", comment: "Therapy profile delivery limits row"))
+                    }
+                }
             }
 
-            Section(footer: Text(NSLocalizedString("Changes to the active profile are applied immediately; basal rate changes are sent to the pump.", comment: "Footer of the therapy profile activation section"))) {
-                if let profile = profile, profiles.isActive(profile) {
-                    Label(NSLocalizedString("Active Profile", comment: "Shown when the therapy profile matches the current therapy settings"), systemImage: "checkmark.circle.fill")
-                } else {
-                    Button {
-                        showActivateConfirmation = true
-                    } label: {
-                        HStack {
-                            Text(NSLocalizedString("Activate Profile", comment: "Button that activates a therapy profile"))
-                            if isActivating {
-                                Spacer()
-                                ProgressView()
-                            }
+            if let profile = profile {
+                Section(footer: Text(NSLocalizedString("A U200 copy halves basal rates, maximum basal rate and maximum bolus and doubles carb ratios and insulin sensitivities, so the same insulin effect results with insulin of double concentration. All amounts in Loop are then pump units. When a profile with another concentration is activated, insulin delivered before is converted to the new pump units, so active insulin stays correct.", comment: "Footer explaining the U200 profile copy"))) {
+                    HStack {
+                        Text(NSLocalizedString("Insulin", comment: "Label of the insulin concentration of a therapy profile"))
+                        Spacer()
+                        Text(profile.concentration.label)
+                            .foregroundColor(profile.isConcentrated ? .orange : .secondary)
+                    }
+                    if !profile.isConcentrated {
+                        Button(NSLocalizedString("Create U200 Profile", comment: "Button that creates a U200 copy of a therapy profile")) {
+                            _ = profiles.addU200Copy(of: profile)
                         }
                     }
-                    .disabled(isActivating || profile == nil)
-                    .alert(NSLocalizedString("Activate Profile?", comment: "Title of the therapy profile activation confirmation"), isPresented: $showActivateConfirmation) {
-                        Button(NSLocalizedString("Activate", comment: "Confirm therapy profile activation"), action: activate)
-                        Button(NSLocalizedString("Cancel", comment: "Cancel therapy profile activation"), role: .cancel) {}
-                    } message: {
-                        Text(NSLocalizedString("The basal rates of this profile are sent to the pump now. Carb ratios and insulin sensitivities take effect immediately.", comment: "Message of the therapy profile activation confirmation"))
+                }
+            }
+
+            Section(footer: Text(NSLocalizedString("Only one profile is active at a time. Changes to the active profile are applied immediately; basal rate changes are sent to the pump. Deactivating a profile returns to Standard.", comment: "Footer of the therapy profile activation section"))) {
+                if let profile = profile, profiles.isActive(profile) {
+                    Label(NSLocalizedString("Active Profile", comment: "Shown when the therapy profile matches the current therapy settings"), systemImage: "checkmark.circle.fill")
+                    if !profile.isStandardProfile, let standard = profiles.standardProfile {
+                        activationButton(
+                            title: NSLocalizedString("Deactivate (Back to Standard)", comment: "Button that deactivates a therapy profile and activates Standard"),
+                            confirmationTitle: NSLocalizedString("Back to Standard?", comment: "Title of the confirmation to deactivate a therapy profile"),
+                            target: standard
+                        )
                     }
+                } else if let profile = profile {
+                    activationButton(
+                        title: NSLocalizedString("Activate Profile", comment: "Button that activates a therapy profile"),
+                        confirmationTitle: NSLocalizedString("Activate Profile?", comment: "Title of the therapy profile activation confirmation"),
+                        target: profile
+                    )
                 }
             }
         }
@@ -1568,10 +1780,35 @@ struct TherapyProfileDetailView: View {
         }
     }
 
-    private func activate() {
-        guard let profile = profile else { return }
+    private func activationButton(title: String, confirmationTitle: String, target: TherapyProfile) -> some View {
+        Button {
+            activationTarget = target
+        } label: {
+            HStack {
+                Text(title)
+                if isActivating {
+                    Spacer()
+                    ProgressView()
+                }
+            }
+        }
+        .disabled(isActivating)
+        .alert(confirmationTitle, isPresented: Binding(
+            get: { activationTarget?.id == target.id },
+            set: { if !$0 { activationTarget = nil } }
+        )) {
+            Button(NSLocalizedString("Activate", comment: "Confirm therapy profile activation")) {
+                activate(target)
+            }
+            Button(NSLocalizedString("Cancel", comment: "Cancel therapy profile activation"), role: .cancel) {}
+        } message: {
+            Text(String(format: NSLocalizedString("The basal rates of “%@” are sent to the pump now. Carb ratios and insulin sensitivities take effect immediately.", comment: "Message of the therapy profile activation confirmation (1: profile name)"), target.name))
+        }
+    }
+
+    private func activate(_ target: TherapyProfile) {
         isActivating = true
-        profiles.activate(profile) { error in
+        profiles.activate(target) { error in
             editor.reload()
             isActivating = false
             activationErrorMessage = error?.localizedDescription

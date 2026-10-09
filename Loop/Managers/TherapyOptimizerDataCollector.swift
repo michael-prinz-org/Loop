@@ -131,16 +131,17 @@ final class TherapyOptimizer: ObservableObject {
             return nil
         }
         let now = Date()
+        let scale = InsulinConcentrationHistory.current.unitsPerPumpUnit
         let sensitivityMilligrams = sensitivity.items.map { item in
-            RepeatingScheduleValue(startTime: item.startTime, value: HKQuantity(unit: sensitivity.unit, doubleValue: item.value).doubleValue(for: .milligramsPerDeciliter))
+            RepeatingScheduleValue(startTime: item.startTime, value: HKQuantity(unit: sensitivity.unit, doubleValue: item.value).doubleValue(for: .milligramsPerDeciliter) / scale)
         }
         var state = TherapyOptimizerState(
             startedAt: now,
             timeZone: basal.timeZone,
-            basal: TherapyOptimizerMath.hourlyValues(basal.items),
+            basal: TherapyOptimizerMath.hourlyValues(basal.items).map { $0 * scale },
             sensitivity: TherapyOptimizerMath.hourlyValues(sensitivityMilligrams),
-            carbRatio: TherapyOptimizerMath.hourlyValues(carbRatio.items),
-            sensitivityUnitString: sensitivity.unit.unitString,
+            carbRatio: TherapyOptimizerMath.hourlyValues(carbRatio.items).map { $0 / scale },
+            sensitivityUnit: sensitivity.unit,
             processingStart: now
         )
         if let previous = previous {
@@ -295,7 +296,9 @@ final class TherapyOptimizer: ObservableObject {
             to: end
         )
         let overrides = state.overrideIntervals
-        let scheduledBasal: (Date) -> Double = { basalSchedule.value(at: $0) }
+        // DoseStore reports all doses in the pump units of the insulin in use now, like the schedules.
+        let scale = InsulinConcentrationHistory.current.unitsPerPumpUnit
+        let scheduledBasal: (Date) -> Double = { basalSchedule.value(at: $0) * scale }
 
         let mgdl = HKUnit.milligramsPerDeciliter
         let velocityUnit = mgdl.unitDivided(by: .minute())
@@ -317,9 +320,9 @@ final class TherapyOptimizer: ObservableObject {
                 counteraction: velocity.quantity.doubleValue(for: velocityUnit),
                 insulinVelocity: (effectEnd - effectStart) / minutes,
                 carbsOnBoard: carbsOnBoard.last(where: { $0.startDate <= velocity.startDate })?.quantity.doubleValue(for: .gram()) ?? 0,
-                manualBolusInsulinOnBoard: manualBolusInsulinOnBoard.last(where: { $0.startDate <= velocity.startDate })?.value ?? 0,
-                netAdjustment: Self.netAdjustmentUnits(doses, from: velocity.startDate, to: velocity.endDate) / (minutes / 60),
-                sensitivity: HKQuantity(unit: sensitivitySchedule.unit, doubleValue: sensitivitySchedule.value(at: velocity.startDate)).doubleValue(for: mgdl),
+                manualBolusInsulinOnBoard: (manualBolusInsulinOnBoard.last(where: { $0.startDate <= velocity.startDate })?.value ?? 0) * scale,
+                netAdjustment: Self.netAdjustmentUnits(doses, from: velocity.startDate, to: velocity.endDate) / (minutes / 60) * scale,
+                sensitivity: HKQuantity(unit: sensitivitySchedule.unit, doubleValue: sensitivitySchedule.value(at: velocity.startDate)).doubleValue(for: mgdl) / scale,
                 isSuspended: doses.contains { $0.type == .suspend && $0.startDate < velocity.endDate && $0.endDate > velocity.startDate },
                 isOverrideActive: overrides.contains { $0.start < velocity.endDate && $0.end > velocity.startDate }
             )
@@ -335,6 +338,7 @@ final class TherapyOptimizer: ObservableObject {
             doses: doses,
             netInsulinOnBoard: netInsulinOnBoard,
             scheduledBasal: scheduledBasal,
+            unitScale: scale,
             overrides: overrides,
             state: &state
         )
@@ -353,6 +357,7 @@ final class TherapyOptimizer: ObservableObject {
         doses: [DoseEntry],
         netInsulinOnBoard: [InsulinValue],
         scheduledBasal: (Date) -> Double,
+        unitScale: Double,
         overrides: [DateInterval],
         state: inout TherapyOptimizerState
     ) -> [TherapyOptimizerMeal] {
@@ -396,20 +401,12 @@ final class TherapyOptimizer: ObservableObject {
             let iobStart = netInsulinOnBoard.last(where: { $0.startDate <= mealStart })?.value ?? 0
             let iobEnd = netInsulinOnBoard.last(where: { $0.startDate <= mealEnd })?.value ?? 0
 
-            var scheduledUnits = 0.0
-            var date = mealStart
-            while date < mealEnd {
-                let next = min(mealEnd, date.addingTimeInterval(5 * 60))
-                scheduledUnits += scheduledBasal(date) * next.timeIntervalSince(date) / 3600
-                date = next
-            }
-
             meals.append(TherapyOptimizerMeal(
                 start: mealStart,
                 end: mealEnd,
                 carbs: grouped.reduce(0) { $0 + $1.grams },
-                netInsulin: boluses + netBasal + iobStart - iobEnd,
-                scheduledBasalUnits: scheduledUnits,
+                netInsulin: (boluses + netBasal + iobStart - iobEnd) * unitScale,
+                scheduledBasalUnits: TherapyOptimizerMath.units(from: mealStart, to: mealEnd, rate: scheduledBasal),
                 glucoseStart: glucoseStart.quantity.doubleValue(for: mgdl),
                 glucoseEnd: glucoseEnd.quantity.doubleValue(for: mgdl),
                 minimumGlucose: windowSamples.map { $0.quantity.doubleValue(for: mgdl) }.min() ?? glucoseStart.quantity.doubleValue(for: mgdl),

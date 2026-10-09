@@ -165,11 +165,11 @@ class LoopSettingsTests: XCTestCase {
     }
 
     func testGlucoseDisplayRangeDefaults() {
-        let settings = LoopSettings()
-        XCTAssertEqual(settings.glucoseUrgentLow, 54)
-        XCTAssertEqual(settings.glucoseLow, 70)
-        XCTAssertEqual(settings.glucoseHigh, 180)
-        XCTAssertEqual(settings.glucoseUrgentHigh, 250)
+        let range = LoopSettings().glucoseDisplayRange
+        XCTAssertEqual(range.urgentLow, 54)
+        XCTAssertEqual(range.low, 70)
+        XCTAssertEqual(range.high, 180)
+        XCTAssertEqual(range.urgentHigh, 250)
     }
 
     func testGlucoseDisplayRangeRawValueRoundTrip() {

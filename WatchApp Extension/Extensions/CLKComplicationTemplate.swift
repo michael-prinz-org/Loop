@@ -317,6 +317,11 @@ extension GlucoseDisplayTier {
             return .staleColor
         }
     }
+
+    /// Slightly translucent so overlapping chart points and lines stay readable.
+    var chartColor: UIColor {
+        complicationColor.withAlphaComponent(0.8)
+    }
 }
 
 private extension GlucoseTrend {

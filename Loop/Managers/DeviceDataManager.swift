@@ -337,6 +337,8 @@ final class DeviceDataManager {
             lastPumpEventsReconciliation: nil, // PumpManager is nil at this point. Will update this via addPumpEvents below
             provenanceIdentifier: HKSource.default().bundleIdentifier
         )
+        InsulinConcentrationHistory.startIfNeeded(with: TherapyProfile.activeProfile()?.concentration ?? .u100)
+        doseStore.pumpUnitScale = InsulinConcentrationHistory.pumpUnitScale(at:)
 
         let glucoseHealthStore = HealthKitSampleStore(
             healthStore: healthStore,

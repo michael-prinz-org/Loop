@@ -116,10 +116,7 @@ class SettingsManager {
                 settings.customLoopIntervalEnabled = defaults.customLoopIntervalEnabled
                 settings.customLoopInterval = defaults.customLoopInterval
                 settings.suppressPodCommunicationInBackground = defaults.suppressPodCommunicationInBackground
-                settings.glucoseUrgentLow = defaults.glucoseUrgentLow
-                settings.glucoseLow = defaults.glucoseLow
-                settings.glucoseHigh = defaults.glucoseHigh
-                settings.glucoseUrgentHigh = defaults.glucoseUrgentHigh
+                settings.glucoseDisplayRange = defaults.glucoseDisplayRange
             }
 
             return settings
@@ -170,10 +167,7 @@ class SettingsManager {
             defaults.customLoopIntervalEnabled = newLoopSettings.customLoopIntervalEnabled
             defaults.customLoopInterval = newLoopSettings.customLoopInterval
             defaults.suppressPodCommunicationInBackground = newLoopSettings.suppressPodCommunicationInBackground
-            defaults.glucoseUrgentLow = newLoopSettings.glucoseUrgentLow
-            defaults.glucoseLow = newLoopSettings.glucoseLow
-            defaults.glucoseHigh = newLoopSettings.glucoseHigh
-            defaults.glucoseUrgentHigh = newLoopSettings.glucoseUrgentHigh
+            defaults.glucoseDisplayRange = newLoopSettings.glucoseDisplayRange
         }
 
         let mergedSettings = mergeSettings(newLoopSettings: newLoopSettings, notificationSettings: notificationSettings, deviceToken: deviceTokenStr)
