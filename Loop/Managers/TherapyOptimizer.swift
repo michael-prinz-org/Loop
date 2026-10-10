@@ -12,7 +12,7 @@ import HealthKit
 import LoopKit
 
 /// One CGM interval (normally 5 min) with everything needed to classify and evaluate it.
-struct TherapyOptimizerInterval {
+struct TherapyOptimizerInterval: Codable, Equatable {
     let start: Date
     let end: Date
     /// mg/dL at the end of the interval
@@ -23,18 +23,75 @@ struct TherapyOptimizerInterval {
     let insulinVelocity: Double
     /// grams
     let carbsOnBoard: Double
-    /// Units of insulin on board from boluses the user gave (not Loop's automatic boluses)
-    let manualBolusInsulinOnBoard: Double
-    /// Loop's adjustment relative to the scheduled basal (temp basals + automatic boluses), U/h
-    let netAdjustment: Double
     /// Insulin sensitivity Loop used for its effect calculation, mg/dL/U
     let sensitivity: Double
     let isSuspended: Bool
     let isOverrideActive: Bool
 }
 
+struct TherapyOptimizerScheduleItem: Codable, Equatable {
+    let startTime: TimeInterval
+    let value: Double
+}
+
+/// Scheduled basal (U100 U/h) a dose was annotated with, i.e. what Loop's insulin effect was net of.
+struct TherapyOptimizerBasalSegment: Codable, Equatable {
+    let start: Date
+    let end: Date
+    let rate: Double
+
+    static func rate(at date: Date, in segments: [TherapyOptimizerBasalSegment]) -> Double? {
+        segments.last { $0.start <= date && date < $0.end }?.rate
+    }
+}
+
+/// Input of one calendar day (all U100), kept for the whole retention so recalculation is not limited to Loop's local history.
+struct TherapyOptimizerRawDay: Codable, Equatable {
+    let day: Date
+    /// Fallback where no basal segment covers a date.
+    var basalSchedule: [TherapyOptimizerScheduleItem]
+    /// From 3 h before the day to its end; optional so files written before this field existed still decode.
+    var basalSegments: [TherapyOptimizerBasalSegment]?
+    var intervals: [TherapyOptimizerInterval] = []
+    var meals: [TherapyOptimizerMeal] = []
+
+    init(day: Date, basalSchedule: [TherapyOptimizerScheduleItem]) {
+        self.day = day
+        self.basalSchedule = basalSchedule
+    }
+
+    func scheduledBasal(at date: Date, calendar: Calendar) -> Double {
+        if let rate = TherapyOptimizerBasalSegment.rate(at: date, in: basalSegments ?? []) {
+            return rate
+        }
+        let offset = date.timeIntervalSince(calendar.startOfDay(for: date))
+        return (basalSchedule.last { $0.startTime <= offset } ?? basalSchedule.first)?.value ?? 0
+    }
+}
+
+/// Loop's original records of one day, so later algorithm versions can derive everything again from scratch.
+/// Insulin amounts and rates are U100 units, whatever insulin was in the pump.
+struct TherapyOptimizerSourceDay: Codable {
+    let day: Date
+    /// U/h, mg/dL/U and g/U as set when the day was collected.
+    var basalSchedule: [TherapyOptimizerScheduleItem]
+    var sensitivitySchedule: [TherapyOptimizerScheduleItem]
+    var carbRatioSchedule: [TherapyOptimizerScheduleItem]
+    var glucose: [StoredGlucoseSample] = []
+    var doses: [DoseEntry] = []
+    var carbEntries: [StoredCarbEntry] = []
+    var overrides: [DateInterval] = []
+
+    init(day: Date, basalSchedule: [TherapyOptimizerScheduleItem], sensitivitySchedule: [TherapyOptimizerScheduleItem], carbRatioSchedule: [TherapyOptimizerScheduleItem]) {
+        self.day = day
+        self.basalSchedule = basalSchedule
+        self.sensitivitySchedule = sensitivitySchedule
+        self.carbRatioSchedule = carbRatioSchedule
+    }
+}
+
 /// A completed meal window (one or more merged carb entries until carbs on board are absorbed).
-struct TherapyOptimizerMeal {
+struct TherapyOptimizerMeal: Codable, Equatable {
     let start: Date
     let end: Date
     /// grams
@@ -89,7 +146,6 @@ struct TherapyOptimizerEstimates: Codable, Equatable {
 struct TherapyOptimizerDaySummary: Codable, Equatable {
     let day: Date
     var basalDeviation = Array(repeating: TherapyOptimizerRateSum(), count: 24)
-    var basalAdjustment = Array(repeating: TherapyOptimizerRateSum(), count: 24)
     var sensitivity = Array(repeating: TherapyOptimizerEstimates(), count: 24)
     var sensitivityAllDay = TherapyOptimizerEstimates()
     var carbRatio = Array(repeating: TherapyOptimizerEstimates(), count: 24)
@@ -178,6 +234,8 @@ struct TherapyOptimizerState: Codable, Equatable {
     var lastDailyUpdate: Date?
     var hypoHoldUntil: Date?
     var unexplainedRiseSince: Date?
+    /// Counteraction of the last few intervals, mg/dL/min; smooths CGM noise for the unannounced-meal check.
+    var recentCounteraction: [Double]?
     /// One entry per `TherapyOptimizerEngine.glucoseRangeUpperBounds` range; display-only.
     var sensitivityByGlucose: [TherapyOptimizerGlucoseRangeSensitivity]?
 
@@ -262,21 +320,19 @@ enum TherapyOptimizerEngine {
     static let maximumDailyChange = 0.10
     static let lowerLimit = 0.7
     static let upperLimit = 1.3
-    static let basalMinimumMinutes = 30.0
-    static let sensitivityMinimumHourly = 6
-    static let sensitivityMinimumAllDay = 12
+    static let basalMinimumMinutes = 15.0
+    static let sensitivityMinimumHourly = 3
+    static let sensitivityMinimumAllDay = 6
     static let carbRatioMinimum = 1
-    static let agreementDeadband = 0.025
     static let reliableHourDataDays = 3
 
     static let hypoThreshold = 70.0
     static let hypoHold: TimeInterval = 60 * 60
-    /// mg/dL/min of unexplained rise without carbs that marks an unannounced meal
-    static let unexplainedRiseThreshold = 1.0
+    /// Mean counteraction (mg/dL/min) over `unexplainedRiseIntervals` without carbs that marks an unannounced meal.
+    /// A dawn rise stays well below this even while Loop is correcting it.
+    static let unexplainedRiseThreshold = 1.5
+    static let unexplainedRiseIntervals = 3
     static let unexplainedRiseMaximum: TimeInterval = 3 * 60 * 60
-    /// mg/dL/min of insulin effect that makes an interval a correction (ISF) interval
-    static let correctionEffectThreshold = 0.2
-    static let manualBolusInsulinOnBoardThreshold = 0.1
     static let sensitivityRatioRange = 0.25...4.0
     static let carbRatioRange = 3.0...40.0
     static let minimumMealInsulin = 0.3
@@ -293,6 +349,8 @@ enum TherapyOptimizerEngine {
 
     static func ingest(_ intervals: [TherapyOptimizerInterval], scheduledBasal: (Date) -> Double, into state: inout TherapyOptimizerState) {
         let calendar = state.calendar
+        var recent = state.recentCounteraction ?? []
+        defer { state.recentCounteraction = recent }
         for interval in intervals.sorted(by: { $0.start < $1.start }) {
             let minutes = interval.end.timeIntervalSince(interval.start) / 60
             guard minutes >= 2, minutes <= 10 else { continue }
@@ -300,10 +358,12 @@ enum TherapyOptimizerEngine {
             if interval.glucose < hypoThreshold {
                 state.hypoHoldUntil = interval.end.addingTimeInterval(hypoHold)
             }
+            recent = Array((recent + [interval.counteraction]).suffix(unexplainedRiseIntervals))
+            let recentRise = recent.reduce(0, +) / Double(recent.count)
             if let since = state.unexplainedRiseSince,
-               interval.counteraction <= 0 || interval.start.timeIntervalSince(since) > unexplainedRiseMaximum {
+               recentRise <= 0 || interval.start.timeIntervalSince(since) > unexplainedRiseMaximum {
                 state.unexplainedRiseSince = nil
-            } else if state.unexplainedRiseSince == nil, interval.carbsOnBoard <= 0, interval.counteraction > unexplainedRiseThreshold {
+            } else if state.unexplainedRiseSince == nil, interval.carbsOnBoard <= 0, recentRise > unexplainedRiseThreshold {
                 state.unexplainedRiseSince = interval.start
             }
 
@@ -313,15 +373,21 @@ enum TherapyOptimizerEngine {
                 continue
             }
 
-            if interval.insulinVelocity <= -correctionEffectThreshold {
+            // Autotune categorisation: ISF only while extra insulin clearly dominates the scheduled basal and glucose is
+            // not rising faster than twice the insulin effect; such a rise without carbs is a basal deficit, whoever corrected it.
+            let glucoseVelocity = interval.counteraction + interval.insulinVelocity
+            let basalVelocity = scheduledBasal(interval.start) * interval.sensitivity / 60
+            let isRising = glucoseVelocity > 0 && glucoseVelocity > -2 * interval.insulinVelocity
+            if -4 * interval.insulinVelocity > basalVelocity, !isRising {
                 addSensitivityEstimate(for: interval, scheduledBasal: scheduledBasal, calendar: calendar, into: &state)
-            } else if interval.manualBolusInsulinOnBoard <= manualBolusInsulinOnBoardThreshold {
+            } else {
                 addBasalEstimates(for: interval, minutes: minutes, scheduledBasal: scheduledBasal, calendar: calendar, into: &state)
             }
         }
     }
 
     /// Basal need shows up in glucose 1-3 h later, so it is attributed to those earlier hours.
+    /// Counteraction nets out all delivered insulin (Loop or manual), so this holds in open and closed loop alike.
     private static func addBasalEstimates(for interval: TherapyOptimizerInterval, minutes: Double, scheduledBasal: (Date) -> Double, calendar: Calendar, into state: inout TherapyOptimizerState) {
         let need = interval.counteraction * 60 / interval.sensitivity
         for hoursBack in 1...3 {
@@ -329,10 +395,6 @@ enum TherapyOptimizerEngine {
             let index = summaryIndex(for: date, calendar: calendar, in: &state)
             state.summaries[index].basalDeviation[calendar.component(.hour, from: date)].add(scheduledBasal(date) + need, minutes: minutes / 3)
         }
-
-        let adjustmentDate = interval.start.addingTimeInterval(-3600)
-        let index = summaryIndex(for: adjustmentDate, calendar: calendar, in: &state)
-        state.summaries[index].basalAdjustment[calendar.component(.hour, from: adjustmentDate)].add(scheduledBasal(adjustmentDate) + interval.netAdjustment, minutes: minutes)
     }
 
     private static func addSensitivityEstimate(for interval: TherapyOptimizerInterval, scheduledBasal: (Date) -> Double, calendar: Calendar, into state: inout TherapyOptimizerState) {
@@ -344,8 +406,8 @@ enum TherapyOptimizerEngine {
         }
         let basalErrorVelocity = basalError / 3 * interval.sensitivity / 60
         let observed = interval.counteraction + interval.insulinVelocity - basalErrorVelocity
-        let ratio = observed / interval.insulinVelocity
-        guard sensitivityRatioRange.contains(ratio) else { return }
+        // Clamp instead of dropping outliers: dropping only the weak side biased the median toward stronger insulin.
+        let ratio = min(max(observed / interval.insulinVelocity, sensitivityRatioRange.lowerBound), sensitivityRatioRange.upperBound)
 
         let estimate = interval.sensitivity * ratio
         let index = summaryIndex(for: interval.start, calendar: calendar, in: &state)
@@ -398,16 +460,9 @@ enum TherapyOptimizerEngine {
 
         for hour in 0..<24 {
             let deviation = rateSamples(window.map { $0.basalDeviation[hour] })
-            let adjustment = rateSamples(window.map { $0.basalAdjustment[hour] })
             state.basal.dataDays[hour] = deviation.count
-            if let deviationTarget = TherapyOptimizerMath.weightedMedian(deviation),
-               let adjustmentTarget = TherapyOptimizerMath.weightedMedian(adjustment) {
-                let current = state.basal.calculated[hour]
-                let deviationDelta = deviationTarget - current
-                let adjustmentDelta = adjustmentTarget - current
-                if deviationDelta * adjustmentDelta > 0 || abs(deviationDelta) <= agreementDeadband || abs(adjustmentDelta) <= agreementDeadband {
-                    state.basal.calculated[hour] = step(current, toward: deviationTarget, start: state.basal.start[hour])
-                }
+            if let target = TherapyOptimizerMath.weightedMedian(deviation) {
+                state.basal.calculated[hour] = step(state.basal.calculated[hour], toward: target, start: state.basal.start[hour])
             }
 
             let sensitivity = estimateSamples(window.map { $0.sensitivity[hour] }, minimumCount: sensitivityMinimumHourly)
@@ -466,20 +521,38 @@ enum TherapyOptimizerEngine {
         return min(max(moved, start * lowerLimit), start * upperLimit)
     }
 
-    /// Restarts from the start values and re-applies one daily update per day covered by the summaries.
-    static func replay(_ state: inout TherapyOptimizerState, through date: Date) {
+    /// Restarts from the start values and rebuilds day by day: the daily update first, then that day's stored input.
+    /// Summaries of days before the first stored day (collected before input was stored) are kept as they are.
+    static func replay(_ state: inout TherapyOptimizerState, rawDays: [TherapyOptimizerRawDay], through date: Date) {
         state.basal.resetCalculated()
         state.sensitivity.resetCalculated()
         state.carbRatio.resetCalculated()
         state.lastDailyUpdate = nil
         state.sensitivityByGlucose = nil
+        state.hypoHoldUntil = nil
+        state.unexplainedRiseSince = nil
+        state.recentCounteraction = nil
 
         let calendar = state.calendar
-        guard let firstDay = state.summaries.first?.day,
-              var day = calendar.date(byAdding: .day, value: 1, to: firstDay) else { return }
+        let rawByDay = Dictionary(rawDays.map { ($0.day, $0) }, uniquingKeysWith: { $1 })
+        let firstRawDay = rawByDay.keys.min() ?? .distantFuture
+        let preserved = state.summaries.filter { $0.day < firstRawDay }
+        state.summaries = preserved
+
+        guard let firstDay = [preserved.first?.day, rawByDay.keys.min()].compactMap({ $0 }).min() else { return }
         let today = calendar.startOfDay(for: date)
+        var day = firstDay
         while day <= today {
-            applyDailyUpdate(to: &state, on: day)
+            if day > firstDay {
+                applyDailyUpdate(to: &state, on: day)
+            }
+            if let raw = rawByDay[day] {
+                ingest(raw.intervals, scheduledBasal: { raw.scheduledBasal(at: $0, calendar: calendar) }, into: &state)
+                ingest(raw.meals, into: &state)
+                // Back-attribution must not add to preserved days again on every replay.
+                state.summaries.removeAll { $0.day < firstRawDay }
+                state.summaries.insert(contentsOf: preserved, at: 0)
+            }
             guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
             day = next
         }

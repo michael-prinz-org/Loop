@@ -14,7 +14,7 @@ struct CalculatedProfileView: View {
     @ObservedObject private var optimizer = TherapyOptimizer.shared
     @ObservedObject var profiles: TherapyProfilesModel
     @State private var showCreateSheet = false
-    @State private var showDisableConfirmation = false
+    @State private var showDeleteConfirmation = false
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -32,7 +32,7 @@ struct CalculatedProfileView: View {
                         if enabled {
                             optimizer.enable()
                         } else {
-                            showDisableConfirmation = true
+                            optimizer.disable()
                         }
                     }
                 ))
@@ -55,16 +55,23 @@ struct CalculatedProfileView: View {
                 sensitivityByGlucoseSection(state)
                 carbRatioSection(state)
             }
+
+            Section(footer: Text(NSLocalizedString("Collected data is kept when the calculation is turned off. Up to 90 days are stored, including Loop's original glucose, insulin and carb records, so values can be calculated again later.", comment: "Footer explaining that therapy optimizer data is kept"))) {
+                Button(NSLocalizedString("Delete Collected Data", comment: "Button that deletes all therapy optimizer data"), role: .destructive) {
+                    showDeleteConfirmation = true
+                }
+                .disabled(optimizer.storedDays == 0 && optimizer.state == nil)
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle(Text(NSLocalizedString("Calculated Profile", comment: "Title of the calculated therapy profile view")))
-        .alert(NSLocalizedString("Turn Off Calculation?", comment: "Title of the confirmation to disable the therapy optimizer"), isPresented: $showDisableConfirmation) {
-            Button(NSLocalizedString("Turn Off", comment: "Confirm disabling the therapy optimizer"), role: .destructive) {
-                optimizer.disable()
+        .alert(NSLocalizedString("Delete Collected Data?", comment: "Title of the confirmation to delete therapy optimizer data"), isPresented: $showDeleteConfirmation) {
+            Button(NSLocalizedString("Delete", comment: "Confirm deleting therapy optimizer data"), role: .destructive) {
+                optimizer.deleteCollectedData()
             }
-            Button(NSLocalizedString("Cancel", comment: "Cancel disabling the therapy optimizer"), role: .cancel) {}
+            Button(NSLocalizedString("Cancel", comment: "Cancel deleting therapy optimizer data"), role: .cancel) {}
         } message: {
-            Text(NSLocalizedString("All calculated values and the collected history are deleted.", comment: "Message of the confirmation to disable the therapy optimizer"))
+            Text(NSLocalizedString("All stored days and calculated values are deleted. Only the last days still in Loop can be collected again.", comment: "Message of the confirmation to delete therapy optimizer data"))
         }
         .sheet(isPresented: $showCreateSheet) {
             if let state = optimizer.state {
@@ -84,6 +91,7 @@ struct CalculatedProfileView: View {
                 }
             }
             valueRow(NSLocalizedString("Days of data", comment: "Number of days with collected therapy optimizer data"), "\(state.summaries.count)")
+            valueRow(NSLocalizedString("Days stored for recalculation", comment: "Number of days of stored input the therapy optimizer can replay"), "\(optimizer.storedDays)")
             valueRow(NSLocalizedString("Last update", comment: "Date of the last therapy optimizer daily update"), state.lastDailyUpdate.map { Self.dateFormatter.string(from: $0) } ?? "–")
             valueRow(NSLocalizedString("Processed until", comment: "Date up to which data was processed by the therapy optimizer"), Self.dateFormatter.string(from: state.lastProcessedDate))
 

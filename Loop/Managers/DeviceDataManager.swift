@@ -339,6 +339,7 @@ final class DeviceDataManager {
         )
         InsulinConcentrationHistory.startIfNeeded(with: TherapyProfile.activeProfile()?.concentration ?? .u100)
         doseStore.pumpUnitScale = InsulinConcentrationHistory.pumpUnitScale(at:)
+        doseStore.insulinDeliveryStore.unitsPerPumpUnit = InsulinConcentrationHistory.unitsPerPumpUnit(at:)
 
         let glucoseHealthStore = HealthKitSampleStore(
             healthStore: healthStore,

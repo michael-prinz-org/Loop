@@ -767,11 +767,12 @@ extension LoopDataManager {
     ///
     /// - Parameters:
     ///   - startDate: The date the dose was started at.
-    ///   - value: The number of Units in the dose.
+    ///   - value: The number of international (U100 pen) units in the dose; stored in pump units.
     ///   - insulinModel: The type of insulin model that should be used for the dose.
     func addManuallyEnteredDose(startDate: Date, units: Double, insulinType: InsulinType? = nil) {
         let syncIdentifier = Data(UUID().uuidString.utf8).hexadecimalString
-        let dose = DoseEntry(type: .bolus, startDate: startDate, value: units, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType, manuallyEntered: true)
+        let pumpUnits = InsulinConcentrationHistory.pumpUnits(fromInternationalUnits: units, at: startDate)
+        let dose = DoseEntry(type: .bolus, startDate: startDate, value: pumpUnits, unit: .units, syncIdentifier: syncIdentifier, insulinType: insulinType, manuallyEntered: true)
 
         doseStore.addDoses([dose], from: nil) { (error) in
             if error == nil {

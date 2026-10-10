@@ -16,6 +16,8 @@ final class TherapyOptimizer: ObservableObject {
     @Published private(set) var state: TherapyOptimizerState?
     @Published private(set) var isProcessing = false
     @Published private(set) var lastError: String?
+    /// Days of stored input that a recalculation can replay.
+    @Published private(set) var storedDays = 0
 
     private let queue = DispatchQueue(label: "com.loopkit.Loop.TherapyOptimizer", qos: .utility)
     private let log = DiagnosticLog(category: "TherapyOptimizer")
@@ -39,6 +41,7 @@ final class TherapyOptimizer: ObservableObject {
         queue.async {
             self.workingState = self.loadState()
             self.publish()
+            self.publishStoredDays()
         }
     }
 
@@ -68,10 +71,21 @@ final class TherapyOptimizer: ObservableObject {
 
     func enable() {
         queue.async {
-            guard let state = self.makeState(keepingSummariesOf: nil) else { return }
+            // Turning calculation off keeps everything collected so far.
+            let previous = self.loadState(from: Self.disabledStateURL)
+            guard var state = self.makeState(keepingSummariesOf: previous) else { return }
+            let backfillStart = self.backfillStart(for: state, now: Date())
+            if state.lastProcessedDate < backfillStart {
+                state.lastProcessedDate = backfillStart
+                state.mealCutoffDate = backfillStart
+                state.hypoHoldUntil = nil
+                state.unexplainedRiseSince = nil
+                state.recentCounteraction = nil
+            }
+            try? FileManager.default.removeItem(at: Self.disabledStateURL)
             self.workingState = state
             self.publish()
-            self.log.default("Enabled; backfilling from %{public}@", String(describing: state.lastProcessedDate))
+            self.log.default("Enabled; processing from %{public}@", String(describing: state.lastProcessedDate))
             self.runProcessing(now: Date(), replay: true)
         }
     }
@@ -86,7 +100,7 @@ final class TherapyOptimizer: ObservableObject {
         }
     }
 
-    /// Re-reads the raw local history and replays the daily updates over the stored summaries.
+    /// Re-reads Loop's local history (last days) and replays all stored input.
     func recalculate() {
         queue.async {
             guard var state = self.workingState else { return }
@@ -96,6 +110,7 @@ final class TherapyOptimizer: ObservableObject {
             state.mealCutoffDate = backfillStart
             state.hypoHoldUntil = nil
             state.unexplainedRiseSince = nil
+            state.recentCounteraction = nil
             self.workingState = state
             self.runProcessing(now: Date(), replay: true)
         }
@@ -105,19 +120,40 @@ final class TherapyOptimizer: ObservableObject {
         queue.async {
             guard var state = self.workingState, TherapyOptimizerState.windowOptions.contains(days) else { return }
             state.windowDays = days
-            TherapyOptimizerEngine.replay(&state, through: Date())
+            TherapyOptimizerEngine.replay(&state, rawDays: self.loadRawDays(calendar: state.calendar), through: Date())
             self.workingState = state
             self.saveState()
             self.publish()
         }
     }
 
+    /// Stops calculating; collected data stays and is used again when turned back on.
     func disable() {
         queue.async {
+            if let state = self.workingState {
+                self.save(state, to: Self.disabledStateURL)
+            }
             self.workingState = nil
             try? FileManager.default.removeItem(at: Self.stateURL)
             self.log.default("Disabled")
             self.publish()
+        }
+    }
+
+    /// Deletes all collected data; a running calculation starts over from Loop's local history.
+    func deleteCollectedData() {
+        queue.async {
+            let wasEnabled = self.workingState != nil
+            self.workingState = nil
+            for url in [Self.stateURL, Self.disabledStateURL, Self.rawDirectoryURL] {
+                try? FileManager.default.removeItem(at: url)
+            }
+            self.log.default("Collected data deleted")
+            self.publish()
+            self.publishStoredDays()
+            if wasEnabled {
+                self.enable()
+            }
         }
     }
 
@@ -152,6 +188,7 @@ final class TherapyOptimizer: ObservableObject {
             state.mealCutoffDate = previous.mealCutoffDate
             state.hypoHoldUntil = previous.hypoHoldUntil
             state.unexplainedRiseSince = previous.unexplainedRiseSince
+            state.recentCounteraction = previous.recentCounteraction
         } else {
             let start = backfillStart(for: state, now: now)
             state.lastProcessedDate = start
@@ -183,18 +220,23 @@ final class TherapyOptimizer: ObservableObject {
         }
 
         if replay {
-            TherapyOptimizerEngine.replay(&state, through: now)
-            log.default("Replayed daily updates over %d days of summaries", state.summaries.count)
+            let rawDays = loadRawDays(calendar: state.calendar)
+            TherapyOptimizerEngine.replay(&state, rawDays: rawDays, through: now)
+            log.default("Replayed %d stored days", rawDays.count)
         } else if (state.lastDailyUpdate ?? .distantPast) < state.calendar.startOfDay(for: now),
                   state.calendar.component(.hour, from: now) >= Self.dailyUpdateHour {
             TherapyOptimizerEngine.applyDailyUpdate(to: &state, on: now)
             log.default("Daily update applied (window %d days)", state.windowDays)
         }
         TherapyOptimizerEngine.compactAndPrune(&state, now: now)
+        if let pruneBefore = state.calendar.date(byAdding: .day, value: -TherapyOptimizerState.retainedDays, to: state.calendar.startOfDay(for: now)) {
+            deleteStoredDays(before: pruneBefore, calendar: state.calendar)
+        }
 
         workingState = state
         saveState()
         publish()
+        publishStoredDays()
         DispatchQueue.main.async {
             self.isProcessing = false
         }
@@ -265,6 +307,7 @@ final class TherapyOptimizer: ObservableObject {
 
         var carbsOnBoard: [CarbValue] = []
         var carbEntries: [(start: Date, grams: Double)] = []
+        var storedCarbEntries: [StoredCarbEntry] = []
         group.enter()
         carbStore.getCarbsOnBoardValues(start: lookbackStart, end: end, effectVelocities: counteraction) { result in
             switch result {
@@ -276,7 +319,9 @@ final class TherapyOptimizer: ObservableObject {
         group.enter()
         carbStore.getCarbStatus(start: lookbackStart, end: end, effectVelocities: counteraction) { result in
             switch result {
-            case .success(let statuses): carbEntries = statuses.map { (start: $0.startDate, grams: $0.quantity.doubleValue(for: .gram())) }
+            case .success(let statuses):
+                carbEntries = statuses.map { (start: $0.startDate, grams: $0.quantity.doubleValue(for: .gram())) }
+                storedCarbEntries = statuses.map { $0.entry }
             case .failure(let error): failure.value = error
             }
             group.leave()
@@ -288,17 +333,21 @@ final class TherapyOptimizer: ObservableObject {
             return false
         }
 
-        let manualBoluses = doses.filter { $0.type == .bolus && $0.automatic != true }
-        let manualBolusInsulinOnBoard = manualBoluses.insulinOnBoard(
-            insulinModelProvider: doseStore.insulinModelProvider,
-            longestEffectDuration: doseStore.longestEffectDuration,
-            from: lookbackStart,
-            to: end
-        )
         let overrides = state.overrideIntervals
         // DoseStore reports all doses in the pump units of the insulin in use now, like the schedules.
         let scale = InsulinConcentrationHistory.current.unitsPerPumpUnit
-        let scheduledBasal: (Date) -> Double = { basalSchedule.value(at: $0) * scale }
+        // Insulin effects are net of the basal each dose was annotated with, which can differ from today's schedule
+        // after a profile or insulin change; the current schedule only fills gaps.
+        let basalSegments = doses.compactMap { dose -> TherapyOptimizerBasalSegment? in
+            guard dose.type != .bolus, dose.endDate > dose.startDate else { return nil }
+            // Scheduled basal doses count as zero net insulin, so their own rate is the baseline.
+            let annotatedRate: Double? = dose.type == .basal ? dose.unitsPerHour : dose.scheduledBasalRate?.doubleValue(for: DoseEntry.unitsPerHour)
+            guard let rate = annotatedRate else { return nil }
+            return TherapyOptimizerBasalSegment(start: dose.startDate, end: dose.endDate, rate: rate * scale)
+        }
+        let scheduledBasal: (Date) -> Double = { date in
+            TherapyOptimizerBasalSegment.rate(at: date, in: basalSegments) ?? basalSchedule.value(at: date) * scale
+        }
 
         let mgdl = HKUnit.milligramsPerDeciliter
         let velocityUnit = mgdl.unitDivided(by: .minute())
@@ -320,8 +369,6 @@ final class TherapyOptimizer: ObservableObject {
                 counteraction: velocity.quantity.doubleValue(for: velocityUnit),
                 insulinVelocity: (effectEnd - effectStart) / minutes,
                 carbsOnBoard: carbsOnBoard.last(where: { $0.startDate <= velocity.startDate })?.quantity.doubleValue(for: .gram()) ?? 0,
-                manualBolusInsulinOnBoard: (manualBolusInsulinOnBoard.last(where: { $0.startDate <= velocity.startDate })?.value ?? 0) * scale,
-                netAdjustment: Self.netAdjustmentUnits(doses, from: velocity.startDate, to: velocity.endDate) / (minutes / 60) * scale,
                 sensitivity: HKQuantity(unit: sensitivitySchedule.unit, doubleValue: sensitivitySchedule.value(at: velocity.startDate)).doubleValue(for: mgdl) / scale,
                 isSuspended: doses.contains { $0.type == .suspend && $0.startDate < velocity.endDate && $0.endDate > velocity.startDate },
                 isOverrideActive: overrides.contains { $0.start < velocity.endDate && $0.end > velocity.startDate }
@@ -343,6 +390,20 @@ final class TherapyOptimizer: ObservableObject {
             state: &state
         )
         TherapyOptimizerEngine.ingest(meals, into: &state)
+
+        let range = start..<end
+        var source = TherapyOptimizerSourceDay(
+            day: start,
+            basalSchedule: basalSchedule.items.map { TherapyOptimizerScheduleItem(startTime: $0.startTime, value: $0.value * scale) },
+            sensitivitySchedule: sensitivitySchedule.items.map { TherapyOptimizerScheduleItem(startTime: $0.startTime, value: HKQuantity(unit: sensitivitySchedule.unit, doubleValue: $0.value).doubleValue(for: mgdl) / scale) },
+            carbRatioSchedule: (carbStore.carbRatioSchedule?.items ?? []).map { TherapyOptimizerScheduleItem(startTime: $0.startTime, value: $0.value / scale) }
+        )
+        source.glucose = samples.filter { range.contains($0.startDate) }
+        // DoseStore reports history in current pump units; store U100 so later insulin changes can't mix units.
+        source.doses = doses.filter { range.contains($0.startDate) }.map { $0.scaled(by: scale, includingScheduledBasalRate: true) }
+        source.carbEntries = storedCarbEntries.filter { range.contains($0.startDate) }
+        source.overrides = overrides
+        storeDays(range, intervals: intervals, meals: meals, basalSegments: basalSegments, source: source, calendar: state.calendar)
 
         log.default("Processed %{public}@ – %{public}@: %d intervals, %d meals", String(describing: start), String(describing: end), intervals.count, meals.count)
         return true
@@ -453,8 +514,12 @@ final class TherapyOptimizer: ObservableObject {
         return directory.appendingPathComponent("TherapyOptimizer.json")
     }
 
-    private func loadState() -> TherapyOptimizerState? {
-        guard let data = try? Data(contentsOf: Self.stateURL) else { return nil }
+    private static var disabledStateURL: URL {
+        stateURL.deletingLastPathComponent().appendingPathComponent("TherapyOptimizer-off.json")
+    }
+
+    private func loadState(from url: URL = TherapyOptimizer.stateURL) -> TherapyOptimizerState? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
         do {
             return try JSONDecoder().decode(TherapyOptimizerState.self, from: data)
         } catch {
@@ -465,8 +530,11 @@ final class TherapyOptimizer: ObservableObject {
 
     private func saveState() {
         guard let state = workingState else { return }
+        save(state, to: Self.stateURL)
+    }
+
+    private func save(_ state: TherapyOptimizerState, to url: URL) {
         do {
-            let url = Self.stateURL
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(state).write(to: url, options: .atomic)
         } catch {
@@ -484,6 +552,120 @@ final class TherapyOptimizer: ObservableObject {
     private func publishError(_ message: String) {
         DispatchQueue.main.async {
             self.lastError = message
+        }
+    }
+
+    // MARK: - Stored days: yyyy-MM-dd.json (derived input) and yyyy-MM-dd.source.json (Loop's records)
+
+    private static var rawDirectoryURL: URL {
+        stateURL.deletingLastPathComponent().appendingPathComponent("TherapyOptimizerDays", isDirectory: true)
+    }
+
+    private static let sourceSuffix = ".source.json"
+
+    private func dayFormatter(_ calendar: Calendar) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }
+
+    private func dayURL(_ day: Date, calendar: Calendar, source: Bool) -> URL {
+        Self.rawDirectoryURL.appendingPathComponent(dayFormatter(calendar).string(from: day) + (source ? Self.sourceSuffix : ".json"))
+    }
+
+    private func storedFiles() -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: Self.rawDirectoryURL, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "json" }
+    }
+
+    private func load<T: Decodable>(_ type: T.Type, at url: URL) -> T? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            log.error("Unreadable day %{public}@: %{public}@", url.lastPathComponent, String(describing: error))
+            return nil
+        }
+    }
+
+    private func loadRawDays(calendar: Calendar) -> [TherapyOptimizerRawDay] {
+        storedFiles()
+            .filter { !$0.lastPathComponent.hasSuffix(Self.sourceSuffix) }
+            .compactMap { load(TherapyOptimizerRawDay.self, at: $0) }
+            .sorted { $0.day < $1.day }
+    }
+
+    /// Records inside `range` are replaced, so reprocessing a range never duplicates and drops records deleted in Loop.
+    private func storeDays(_ range: Range<Date>, intervals: [TherapyOptimizerInterval], meals: [TherapyOptimizerMeal], basalSegments: [TherapyOptimizerBasalSegment], source chunk: TherapyOptimizerSourceDay, calendar: Calendar) {
+        var chunkDays: [Date] = []
+        var day = calendar.startOfDay(for: range.lowerBound)
+        while day < range.upperBound, let next = calendar.date(byAdding: .day, value: 1, to: day) {
+            chunkDays.append(day)
+            day = next
+        }
+        // Meals can complete after the chunk their start belongs to.
+        let mealOnlyDays = Set(meals.map { calendar.startOfDay(for: $0.start) }).subtracting(chunkDays)
+
+        do {
+            try FileManager.default.createDirectory(at: Self.rawDirectoryURL, withIntermediateDirectories: true)
+            for day in chunkDays + mealOnlyDays.sorted() {
+                guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: day) else { continue }
+                let isInChunk = chunkDays.contains(day)
+                let belongs = { (date: Date) in date >= day && date < dayEnd }
+
+                let rawURL = dayURL(day, calendar: calendar, source: false)
+                var raw = load(TherapyOptimizerRawDay.self, at: rawURL) ?? TherapyOptimizerRawDay(day: day, basalSchedule: chunk.basalSchedule)
+                if isInChunk {
+                    raw.basalSchedule = chunk.basalSchedule
+                    // Back-attribution looks up to 3 h before the day.
+                    let segmentStart = day.addingTimeInterval(-3 * 3600)
+                    let segments = (raw.basalSegments ?? []) + basalSegments.filter { $0.end > segmentStart && $0.start < dayEnd }
+                    raw.basalSegments = Dictionary(segments.map { ($0.start, $0) }, uniquingKeysWith: { $1 }).values.sorted { $0.start < $1.start }
+                    raw.intervals = Self.replacing(raw.intervals, in: range, with: intervals.filter { belongs($0.start) }, date: \.start)
+                    raw.meals = raw.meals.filter { !range.contains($0.start) }
+                }
+                let mealStarts = Set(meals.map { $0.start })
+                raw.meals = (raw.meals.filter { !mealStarts.contains($0.start) } + meals.filter { belongs($0.start) }).sorted { $0.start < $1.start }
+                try JSONEncoder().encode(raw).write(to: rawURL, options: .atomic)
+
+                guard isInChunk else { continue }
+                let sourceURL = dayURL(day, calendar: calendar, source: true)
+                var source = load(TherapyOptimizerSourceDay.self, at: sourceURL) ?? TherapyOptimizerSourceDay(day: day, basalSchedule: [], sensitivitySchedule: [], carbRatioSchedule: [])
+                source.basalSchedule = chunk.basalSchedule
+                source.sensitivitySchedule = chunk.sensitivitySchedule
+                source.carbRatioSchedule = chunk.carbRatioSchedule
+                source.glucose = Self.replacing(source.glucose, in: range, with: chunk.glucose.filter { belongs($0.startDate) }, date: \.startDate)
+                source.doses = Self.replacing(source.doses, in: range, with: chunk.doses.filter { belongs($0.startDate) }, date: \.startDate)
+                source.carbEntries = Self.replacing(source.carbEntries, in: range, with: chunk.carbEntries.filter { belongs($0.startDate) }, date: \.startDate)
+                // An override still running when first stored ends later; keep the latest version per start.
+                source.overrides = Dictionary((source.overrides + chunk.overrides.filter { $0.start < dayEnd && $0.end > day }).map { ($0.start, $0) }, uniquingKeysWith: { $1 })
+                    .values.sorted { $0.start < $1.start }
+                try JSONEncoder().encode(source).write(to: sourceURL, options: .atomic)
+            }
+        } catch {
+            log.error("Storing days failed: %{public}@", String(describing: error))
+        }
+    }
+
+    private static func replacing<T>(_ existing: [T], in range: Range<Date>, with new: [T], date: KeyPath<T, Date>) -> [T] {
+        (existing.filter { !range.contains($0[keyPath: date]) } + new).sorted { $0[keyPath: date] < $1[keyPath: date] }
+    }
+
+    private func deleteStoredDays(before day: Date, calendar: Calendar) {
+        let cutoff = dayFormatter(calendar).string(from: day)
+        // yyyy-MM-dd sorts like the date it names.
+        for url in storedFiles() where String(url.lastPathComponent.prefix(10)) < cutoff {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func publishStoredDays() {
+        let count = Set(storedFiles().map { $0.lastPathComponent.prefix(10) }).count
+        DispatchQueue.main.async {
+            self.storedDays = count
         }
     }
 }

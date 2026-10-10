@@ -234,6 +234,17 @@ enum InsulinConcentrationHistory {
         let then = history.last { $0.start <= date }?.concentration ?? current
         return then.unitsPerPumpUnit / current.unitsPerPumpUnit
     }
+
+    /// U100 (international) units per pump unit of the insulin in use at `date`.
+    static func unitsPerPumpUnit(at date: Date) -> Double {
+        let history = changes.value
+        return (history.last { $0.start <= date } ?? history.last)?.concentration.unitsPerPumpUnit ?? 1
+    }
+
+    /// Pump units at `date` for insulin given in international units, e.g. a U100 pen injection.
+    static func pumpUnits(fromInternationalUnits units: Double, at date: Date) -> Double {
+        units / unitsPerPumpUnit(at: date)
+    }
 }
 
 /// A named set of basal rates, carb ratios and insulin sensitivities the user can switch between.

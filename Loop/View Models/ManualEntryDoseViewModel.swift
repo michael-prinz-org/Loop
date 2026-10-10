@@ -257,7 +257,9 @@ final class ManualEntryDoseViewModel: ObservableObject {
 
         let (enteredBolus, doseDate, insulinType) = DispatchQueue.main.sync { (self.enteredBolus, self.selectedDoseDate, self.selectedInsulinType) }
         
-        let enteredBolusDose = DoseEntry(type: .bolus, startDate: doseDate, value: enteredBolus.doubleValue(for: .internationalUnit()), unit: .units, insulinType: insulinType)
+        // Entered in pen (U100) units; the forecast works in current pump units.
+        let pumpUnits = enteredBolus.doubleValue(for: .internationalUnit()) / InsulinConcentrationHistory.current.unitsPerPumpUnit
+        let enteredBolusDose = DoseEntry(type: .bolus, startDate: doseDate, value: pumpUnits, unit: .units, insulinType: insulinType)
 
         let predictedGlucoseValues: [PredictedGlucoseValue]
         do {
