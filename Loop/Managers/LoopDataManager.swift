@@ -1603,12 +1603,30 @@ extension LoopDataManager {
             to: glucoseTargetRange,
             at: now(),
             suspendThreshold: settings.suspendThreshold?.quantity,
-            sensitivity: insulinSensitivity,
+            sensitivity: correctionSensitivity(insulinSensitivity, at: predictedGlucose.first),
             model: model,
             pendingInsulin: 0, // Pending insulin is already reflected in the prediction
             maxBolus: maxBolus,
             volumeRounder: volumeRounder
         )
+    }
+
+    /// Insulin sensitivity for correction dosing (Dynamic-ISF style): when enabled, scaled by the factor observed for the
+    /// current glucose range. Predictions keep using the unscaled schedule.
+    private func correctionSensitivity<Sample: GlucoseValue>(_ schedule: InsulinSensitivitySchedule, at glucose: Sample?) -> InsulinSensitivitySchedule {
+        guard UserDefaults.standard.glucoseDependentSensitivityEnabled,
+              let glucose = glucose,
+              let factor = TherapyOptimizer.shared.dosingSensitivityFactor(forGlucose: glucose.quantity.doubleValue(for: .milligramsPerDeciliter)),
+              abs(factor - 1) > 0.005,
+              let scaled = InsulinSensitivitySchedule(
+                unit: schedule.unit,
+                dailyItems: schedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: $0.value * factor) },
+                timeZone: schedule.timeZone
+              ) else {
+            return schedule
+        }
+        logger.default("Glucose-dependent insulin sensitivity factor %.2f at %{public}@", factor, glucose.quantity.description)
+        return scaled
     }
 
     /// Generates a correction effect based on how large the discrepancy is between the current glucose and its model predicted value.
@@ -1860,6 +1878,7 @@ extension LoopDataManager {
             }
 
             let dosingRecommendation: AutomaticDoseRecommendation?
+            let correctionSensitivity = self.correctionSensitivity(insulinSensitivity!, at: predictedGlucose.first)
 
             // automaticDosingIOBLimit calculated from the user entered maxBolus
             let automaticDosingIOBLimit = maxBolus! * 2.0
@@ -1893,7 +1912,7 @@ extension LoopDataManager {
                     to: glucoseTargetRange!,
                     at: predictedGlucose[0].startDate,
                     suspendThreshold: settings.suspendThreshold?.quantity,
-                    sensitivity: insulinSensitivity!,
+                    sensitivity: correctionSensitivity,
                     model: doseStore.insulinModelProvider.model(for: pumpInsulinType),
                     basalRates: basalRateSchedule!,
                     maxAutomaticBolus: maxAutomaticBolus,
@@ -1909,7 +1928,7 @@ extension LoopDataManager {
                     to: glucoseTargetRange!,
                     at: predictedGlucose[0].startDate,
                     suspendThreshold: settings.suspendThreshold?.quantity,
-                    sensitivity: insulinSensitivity!,
+                    sensitivity: correctionSensitivity,
                     model: doseStore.insulinModelProvider.model(for: pumpInsulinType),
                     basalRates: basalRateSchedule!,
                     maxBasalRate: maxBasal!,

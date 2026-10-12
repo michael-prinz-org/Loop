@@ -1549,6 +1549,73 @@ final class TherapyProfilesModel: ObservableObject {
         liveViewModel.saveBasalRates(basalRates: profile.basalRateSchedule)
     }
 
+    enum ScheduleKind {
+        case basal, sensitivity, carbRatio
+    }
+
+    enum ScheduleChange {
+        /// From the hour to the next full hour, in the profile's own units and concentration
+        case value(Double, hour: Int)
+        /// Every entry multiplied, keeping the profile's shape
+        case scale(Double)
+    }
+
+    /// Changes a profile; for the active profile the change takes effect immediately and basal rates go to the pump first.
+    func changeProfile(withID id: UUID, _ kind: ScheduleKind, _ change: ScheduleChange, completion: @escaping (Error?) -> Void) {
+        guard var profile = self.profile(withID: id) else {
+            completion(TherapyProfileError.invalidSchedule)
+            return
+        }
+        // Keep values on the editors' grids (0.05 U/h, 1 mg/dL or 0.1 mmol/L, 0.1 g/U).
+        let stepsPerUnit: Double
+        switch kind {
+        case .basal: stepsPerUnit = 20
+        case .sensitivity: stepsPerUnit = profile.insulinSensitivitySchedule.unit == .milligramsPerDeciliter ? 1 : 10
+        case .carbRatio: stepsPerUnit = 10
+        }
+        let changed = { (items: [RepeatingScheduleValue<Double>]) -> [RepeatingScheduleValue<Double>] in
+            switch change {
+            case .value(let value, let hour):
+                return TherapyOptimizerMath.settingValue(value, forHour: hour, in: items)
+            case .scale(let factor):
+                return items.map { RepeatingScheduleValue(startTime: $0.startTime, value: ($0.value * factor * stepsPerUnit).rounded() / stepsPerUnit) }
+            }
+        }
+        switch kind {
+        case .basal:
+            let schedule = profile.basalRateSchedule
+            guard let updated = BasalRateSchedule(dailyItems: changed(schedule.items), timeZone: schedule.timeZone) else {
+                completion(TherapyProfileError.invalidSchedule)
+                return
+            }
+            profile.basalRateSchedule = updated
+        case .sensitivity:
+            let schedule = profile.insulinSensitivitySchedule
+            guard let updated = InsulinSensitivitySchedule(unit: schedule.unit, dailyItems: changed(schedule.items), timeZone: schedule.timeZone) else {
+                completion(TherapyProfileError.invalidSchedule)
+                return
+            }
+            profile.insulinSensitivitySchedule = updated
+        case .carbRatio:
+            let schedule = profile.carbRatioSchedule
+            guard let updated = CarbRatioSchedule(unit: schedule.unit, dailyItems: changed(schedule.items), timeZone: schedule.timeZone) else {
+                completion(TherapyProfileError.invalidSchedule)
+                return
+            }
+            profile.carbRatioSchedule = updated
+        }
+        let profileIsActive = isActive(profile)
+        if profileIsActive, kind == .basal {
+            activate(profile, completion: completion)
+            return
+        }
+        save(profile)
+        if profileIsActive {
+            apply(profile)
+        }
+        completion(nil)
+    }
+
     private func persist(_ updated: [TherapyProfile]) {
         profiles = updated
         UserDefaults.standard.therapyProfiles = updated
@@ -1757,11 +1824,30 @@ struct TherapyProfileDetailView: View {
     @State private var isActivating = false
     @State private var activationErrorMessage: String?
     @State private var copySource: TherapyProfile?
+    @ObservedObject private var optimizer = TherapyOptimizer.shared
+    @State private var showCalculatedProfile: Bool
+    @State private var pendingCalculatedChange: CalculatedProfileChange?
+    @State private var calculatedMessage: String?
 
     init(profileID: UUID, profiles: TherapyProfilesModel) {
         self.profiles = profiles
         _editor = StateObject(wrappedValue: TherapyProfileEditorModel(profileID: profileID, profiles: profiles))
         _name = State(initialValue: profiles.profile(withID: profileID)?.name ?? "")
+        _showCalculatedProfile = State(initialValue: UserDefaults.standard.profilesShowingCalculatedValues.contains(profileID))
+    }
+
+    /// Remembered per profile.
+    private var showCalculatedProfileBinding: Binding<Bool> {
+        Binding(get: { showCalculatedProfile }, set: { show in
+            showCalculatedProfile = show
+            var ids = UserDefaults.standard.profilesShowingCalculatedValues
+            if show {
+                ids.insert(editor.profileID)
+            } else {
+                ids.remove(editor.profileID)
+            }
+            UserDefaults.standard.profilesShowingCalculatedValues = ids
+        })
     }
 
     private var profile: TherapyProfile? {
@@ -1832,9 +1918,19 @@ struct TherapyProfileDetailView: View {
                     )
                 }
             }
+
+            if let state = optimizer.state, let profile = profile {
+                Section(footer: Text(NSLocalizedString("Compares this profile with the calculated values, converted to this profile's insulin. Tap a value to apply it to this profile.", comment: "Footer of the switch that shows the calculated profile in a therapy profile"))) {
+                    Toggle(NSLocalizedString("Show Calculated Profile", comment: "Switch that shows the calculated values in a therapy profile"), isOn: showCalculatedProfileBinding)
+                }
+                if showCalculatedProfile {
+                    CalculatedValuesSections(state: state, profile: profile, pendingChange: $pendingCalculatedChange, message: $calculatedMessage)
+                }
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle(Text(name))
+        .calculatedProfileChangeDialogs($pendingCalculatedChange, message: $calculatedMessage, profiles: profiles, onChanged: editor.reload)
         .onChange(of: name) { newName in
             guard var profile = profile else { return }
             profile.name = newName

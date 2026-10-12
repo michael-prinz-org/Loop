@@ -21,7 +21,23 @@ extension UserDefaults {
         case activeTherapyProfileID = "com.loopkit.Loop.activeTherapyProfileID"
         case insulinConcentrationChanges = "com.loopkit.Loop.insulinConcentrationChanges"
         case insulinEffectMonitorSettings = "com.loopkit.Loop.insulinEffectMonitorSettings"
+        case glucoseDependentSensitivityEnabled = "com.loopkit.Loop.glucoseDependentSensitivityEnabled"
+        case profilesShowingCalculatedValues = "com.loopkit.Loop.profilesShowingCalculatedValues"
     }
+
+    /// Therapy profiles whose detail view shows the calculated profile.
+    var profilesShowingCalculatedValues: Set<UUID> {
+        get { Set((stringArray(forKey: Key.profilesShowingCalculatedValues.rawValue) ?? []).compactMap(UUID.init(uuidString:))) }
+        set { set(newValue.map { $0.uuidString }, forKey: Key.profilesShowingCalculatedValues.rawValue) }
+    }
+
+    /// Corrections and bolus recommendations scale insulin sensitivity by the observed factor for the current glucose range.
+    var glucoseDependentSensitivityEnabled: Bool {
+        get { bool(forKey: Key.glucoseDependentSensitivityEnabled.rawValue) }
+        set { set(newValue, forKey: Key.glucoseDependentSensitivityEnabled.rawValue) }
+    }
+
+    static let glucoseDependentSensitivityEnabledKey = Key.glucoseDependentSensitivityEnabled.rawValue
 
     var legacyPumpManagerRawValue: PumpManager.RawValue? {
         get {
