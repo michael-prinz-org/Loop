@@ -28,6 +28,7 @@ final class TherapyOptimizer: ObservableObject {
     private var carbStore: CarbStoreProtocol?
     private var workingState: TherapyOptimizerState?
     private var lastProcessingAttempt: Date = .distantPast
+    private var settingsObserver: NSObjectProtocol?
 
     /// Data younger than this is not processed yet: meals and late CGM backfill need time to settle.
     private static let processingDelay: TimeInterval = 3 * 3600
@@ -42,6 +43,12 @@ final class TherapyOptimizer: ObservableObject {
             self.workingState = self.loadState()
             self.publish()
             self.publishStoredDays()
+        }
+        // Posted after every settings change (and often otherwise); comparing start values is cheap.
+        settingsObserver = NotificationCenter.default.addObserver(forName: .LoopDataUpdated, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async {
+                self?.restartIfSettingsChanged()
+            }
         }
     }
 
@@ -90,14 +97,17 @@ final class TherapyOptimizer: ObservableObject {
         }
     }
 
-    /// New start values from the current settings; collected history is kept.
-    func restartFromCurrentSettings() {
-        queue.async {
-            guard let state = self.makeState(keepingSummariesOf: self.workingState) else { return }
-            self.workingState = state
-            self.publish()
-            self.runProcessing(now: Date(), replay: true)
-        }
+    /// The active profile is the reference: when its values change, everything is recalculated from them.
+    private func restartIfSettingsChanged() {
+        guard let state = workingState,
+              let current = stateFromCurrentSettings(now: Date()),
+              !current.hasSameStartValues(as: state),
+              let restarted = makeState(keepingSummariesOf: state) else { return }
+        log.default("Active therapy settings changed; recalculating against them")
+        workingState = restarted
+        publish()
+        lastProcessingAttempt = Date()
+        runProcessing(now: Date(), replay: true)
     }
 
     /// Re-reads Loop's local history (last days) and replays all stored input.
@@ -160,26 +170,11 @@ final class TherapyOptimizer: ObservableObject {
     // MARK: - Processing (on queue)
 
     private func makeState(keepingSummariesOf previous: TherapyOptimizerState?) -> TherapyOptimizerState? {
-        guard let basal = doseStore?.basalProfile,
-              let sensitivity = doseStore?.insulinSensitivitySchedule,
-              let carbRatio = carbStore?.carbRatioSchedule else {
+        let now = Date()
+        guard var state = stateFromCurrentSettings(now: now) else {
             publishError(NSLocalizedString("Basal rates, insulin sensitivities and carb ratios must be set up first.", comment: "Error when the therapy optimizer cannot read the current therapy settings"))
             return nil
         }
-        let now = Date()
-        let scale = InsulinConcentrationHistory.current.unitsPerPumpUnit
-        let sensitivityMilligrams = sensitivity.items.map { item in
-            RepeatingScheduleValue(startTime: item.startTime, value: HKQuantity(unit: sensitivity.unit, doubleValue: item.value).doubleValue(for: .milligramsPerDeciliter) / scale)
-        }
-        var state = TherapyOptimizerState(
-            startedAt: now,
-            timeZone: basal.timeZone,
-            basal: TherapyOptimizerMath.hourlyValues(basal.items).map { $0 * scale },
-            sensitivity: TherapyOptimizerMath.hourlyValues(sensitivityMilligrams),
-            carbRatio: TherapyOptimizerMath.hourlyValues(carbRatio.items).map { $0 / scale },
-            sensitivityUnit: sensitivity.unit,
-            processingStart: now
-        )
         if let previous = previous {
             state.windowDays = previous.windowDays
             state.summaries = previous.summaries
@@ -195,6 +190,28 @@ final class TherapyOptimizer: ObservableObject {
             state.mealCutoffDate = start
         }
         return state
+    }
+
+    /// A fresh state whose start values are the active therapy settings in U100.
+    private func stateFromCurrentSettings(now: Date) -> TherapyOptimizerState? {
+        guard let basal = doseStore?.basalProfile,
+              let sensitivity = doseStore?.insulinSensitivitySchedule,
+              let carbRatio = carbStore?.carbRatioSchedule else {
+            return nil
+        }
+        let scale = InsulinConcentrationHistory.current.unitsPerPumpUnit
+        let sensitivityMilligrams = sensitivity.items.map { item in
+            RepeatingScheduleValue(startTime: item.startTime, value: HKQuantity(unit: sensitivity.unit, doubleValue: item.value).doubleValue(for: .milligramsPerDeciliter) / scale)
+        }
+        return TherapyOptimizerState(
+            startedAt: now,
+            timeZone: basal.timeZone,
+            basal: TherapyOptimizerMath.hourlyValues(basal.items).map { $0 * scale },
+            sensitivity: TherapyOptimizerMath.hourlyValues(sensitivityMilligrams),
+            carbRatio: TherapyOptimizerMath.hourlyValues(carbRatio.items).map { $0 / scale },
+            sensitivityUnit: sensitivity.unit,
+            processingStart: now
+        )
     }
 
     private func backfillStart(for state: TherapyOptimizerState, now: Date) -> Date {
@@ -544,9 +561,27 @@ final class TherapyOptimizer: ObservableObject {
 
     private func publish() {
         let snapshot = workingState
+        glucoseRanges.value = snapshot?.sensitivityByGlucose
         DispatchQueue.main.async {
             self.state = snapshot
         }
+    }
+
+    // MARK: - Dosing
+
+    /// Read from Loop's dosing queue, so kept apart from the main-thread `state`.
+    private let glucoseRanges = Locked<[TherapyOptimizerGlucoseRangeSensitivity]?>(nil)
+
+    /// Factor for the insulin sensitivity used in correction dosing at this glucose; nil when the range has too little data
+    /// or glucose is low.
+    func dosingSensitivityFactor(forGlucose milligramsPerDeciliter: Double) -> Double? {
+        guard milligramsPerDeciliter >= TherapyOptimizerEngine.hypoThreshold, let ranges = glucoseRanges.value else { return nil }
+        let index = TherapyOptimizerEngine.glucoseRangeIndex(for: milligramsPerDeciliter)
+        guard index < ranges.count, ranges[index].dataDays >= TherapyOptimizerEngine.reliableHourDataDays, let factor = ranges[index].factor else {
+            return nil
+        }
+        let limits = TherapyOptimizerEngine.dosingSensitivityFactorRange
+        return min(max(factor, limits.lowerBound), limits.upperBound)
     }
 
     private func publishError(_ message: String) {

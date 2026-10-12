@@ -353,6 +353,33 @@ final class TherapyOptimizerTests: XCTestCase {
         XCTAssertEqual(values, [Double(14) / 20, Double(15) / 20, Double(3) / 20, Double(14) / 20])
     }
 
+    func testSettingValueForOneHourSplitsAndMergesSchedule() {
+        let items = [RepeatingScheduleValue(startTime: 0, value: 1.0), RepeatingScheduleValue(startTime: 6 * hour, value: 1.2)]
+
+        let night = TherapyOptimizerMath.settingValue(1.1, forHour: 1, in: items)
+        XCTAssertEqual(night.map { $0.startTime }, [0, hour, 2 * hour, 6 * hour])
+        XCTAssertEqual(night.map { $0.value }, [1.0, 1.1, 1.0, 1.2])
+
+        let beforeChange = TherapyOptimizerMath.settingValue(1.2, forHour: 5, in: items)
+        XCTAssertEqual(beforeChange.map { $0.startTime }, [0, 5 * hour])
+        XCTAssertEqual(beforeChange.map { $0.value }, [1.0, 1.2])
+    }
+
+    func testAllDayChangeKeepsHourlyProfileShape() {
+        var state = makeState(sensitivity: 50)
+        state.sensitivity = TherapyOptimizerValues(hourly: (0..<24).map { $0 < 12 ? 40.0 : 60.0 })
+        state.sensitivity.calculatedAllDay = 55
+        state.sensitivity.calculated[3] = 30
+        state.sensitivity.dataDays[3] = 5
+
+        XCTAssertEqual(state.sensitivity.scaledStart[0], 44, accuracy: 0.0001)
+        XCTAssertEqual(state.sensitivity.scaledStart[20], 66, accuracy: 0.0001)
+        let hourly = state.sensitivity.exportHourly(minimumDataDays: TherapyOptimizerEngine.reliableHourDataDays)
+        XCTAssertEqual(hourly[3], 30, accuracy: 0.0001)
+        XCTAssertEqual(hourly[4], 44, accuracy: 0.0001)
+        XCTAssertEqual(hourly[13], 66, accuracy: 0.0001)
+    }
+
     func testUnitsIntegratesHourlyRate() {
         let units = TherapyOptimizerMath.units(from: day0, to: day0.addingTimeInterval(2 * hour + 150)) { $0 < self.day0.addingTimeInterval(self.hour) ? 1.2 : 0.6 }
         XCTAssertEqual(units, 1.2 + 0.6 + 0.6 * 150 / 3600, accuracy: 0.0001)
