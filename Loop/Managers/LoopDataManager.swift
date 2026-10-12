@@ -1614,7 +1614,7 @@ extension LoopDataManager {
     /// Insulin sensitivity for correction dosing (Dynamic-ISF style): when enabled, scaled by the factor observed for the
     /// current glucose range. Predictions keep using the unscaled schedule.
     private func correctionSensitivity<Sample: GlucoseValue>(_ schedule: InsulinSensitivitySchedule, at glucose: Sample?) -> InsulinSensitivitySchedule {
-        guard UserDefaults.standard.glucoseDependentSensitivityEnabled,
+        guard TherapyProfile.activeProfile()?.usesGlucoseDependentSensitivity == true,
               let glucose = glucose,
               let factor = TherapyOptimizer.shared.dosingSensitivityFactor(forGlucose: glucose.quantity.doubleValue(for: .milligramsPerDeciliter)),
               abs(factor - 1) > 0.005,

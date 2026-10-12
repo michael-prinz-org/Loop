@@ -1922,9 +1922,14 @@ struct TherapyProfileDetailView: View {
             if let state = optimizer.state, let profile = profile {
                 Section(footer: Text(NSLocalizedString("Compares this profile with the calculated values, converted to this profile's insulin. Tap a value to apply it to this profile.", comment: "Footer of the switch that shows the calculated profile in a therapy profile"))) {
                     Toggle(NSLocalizedString("Show Calculated Profile", comment: "Switch that shows the calculated values in a therapy profile"), isOn: showCalculatedProfileBinding)
+                    if !showCalculatedProfile, profile.usesGlucoseDependentSensitivity == true {
+                        Label(NSLocalizedString("Glucose-dependent sensitivity is used for corrections", comment: "Shown while a profile's glucose-dependent insulin sensitivity is on but the calculated tables are hidden"), systemImage: "waveform.path.ecg")
+                            .font(.footnote)
+                            .foregroundColor(.orange)
+                    }
                 }
                 if showCalculatedProfile {
-                    CalculatedValuesSections(state: state, profile: profile, pendingChange: $pendingCalculatedChange, message: $calculatedMessage)
+                    CalculatedValuesSections(state: state, profile: profile, profiles: profiles, pendingChange: $pendingCalculatedChange, message: $calculatedMessage)
                 }
             }
         }

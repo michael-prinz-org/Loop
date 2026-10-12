@@ -17,7 +17,6 @@ struct CalculatedProfileView: View {
     @State private var showDeleteConfirmation = false
     @State private var pendingChange: CalculatedProfileChange?
     @State private var message: String?
-    @AppStorage(UserDefaults.glucoseDependentSensitivityEnabledKey) private var glucoseDependentSensitivity = false
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -28,7 +27,7 @@ struct CalculatedProfileView: View {
 
     var body: some View {
         List {
-            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides, lows or unannounced meals and compared with the active profile, which is followed automatically when it changes. All values are U100; data from times a U200 profile was active is converted automatically. The values never change dosing by themselves (except glucose-dependent sensitivity when \u{201C}Use for Corrections\u{201D} is on): tap a value to apply it to the active profile.", comment: "Footer explaining the calculated therapy profile"))) {
+            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides, lows or unannounced meals and compared with the active profile, which is followed automatically when it changes. All values are U100; data from times a U200 profile was active is converted automatically. The values never change dosing by themselves (except glucose-dependent sensitivity when a profile's \u{201C}Use for Corrections\u{201D} is on): tap a value to apply it to the active profile.", comment: "Footer explaining the calculated therapy profile"))) {
                 Toggle(NSLocalizedString("Calculate Profile", comment: "Toggle that enables the therapy optimizer"), isOn: Binding(
                     get: { optimizer.state != nil },
                     set: { enabled in
@@ -54,9 +53,8 @@ struct CalculatedProfileView: View {
             if let state = optimizer.state {
                 statusSection(state)
                 if let profile = TherapyProfile.activeProfile() {
-                    CalculatedValuesSections(state: state, profile: profile, pendingChange: $pendingChange, message: $message)
+                    CalculatedValuesSections(state: state, profile: profile, profiles: profiles, pendingChange: $pendingChange, message: $message)
                 }
-                sensitivityByGlucoseSection(state)
             }
 
             Section(footer: Text(NSLocalizedString("Collected data is kept when the calculation is turned off. Up to 90 days are stored, including Loop's original glucose, insulin and carb records, so values can be calculated again later.", comment: "Footer explaining that therapy optimizer data is kept"))) {
@@ -109,56 +107,6 @@ struct CalculatedProfileView: View {
         }
     }
 
-    private func sensitivityByGlucoseSection(_ state: TherapyOptimizerState) -> some View {
-        let format = state.sensitivityUnit == .milligramsPerDeciliter ? "%.0f" : "%.1f"
-        let bounds = TherapyOptimizerEngine.glucoseRangeUpperBounds.map { String(format: format, state.displaySensitivity($0)) }
-        let ranges = state.sensitivityByGlucose ?? []
-        return Section(
-            header: VStack(alignment: .leading, spacing: 2) {
-                Text(NSLocalizedString("Insulin Sensitivity by Glucose", comment: "Header of the insulin sensitivity by glucose range table"))
-                Text(NSLocalizedString("Glucose · Change · Sensitivity · Days", comment: "Column legend of the insulin sensitivity by glucose range table"))
-                    .font(.caption2)
-            },
-            footer: Text(NSLocalizedString("Change relative to the reference row, your overall observed insulin sensitivity: e.g. −15 % means insulin works 15 % less in that range. With “Use for Corrections” on, corrections and bolus recommendations use the active profile's insulin sensitivity times this change (limited to ±20 %), only for ranges with at least 3 days of data and never below 70 mg/dL. Forecasts are not changed.", comment: "Footer of the insulin sensitivity by glucose range table"))
-        ) {
-            Toggle(NSLocalizedString("Use for Corrections", comment: "Switch that applies the glucose-dependent insulin sensitivity to correction dosing"), isOn: $glucoseDependentSensitivity)
-            glucoseRangeRow(NSLocalizedString("Reference", comment: "Row with the overall sensitivity the glucose ranges are compared with"), range: state.sensitivityByGlucoseReference, state: state, format: format)
-            ForEach(0..<TherapyOptimizerEngine.glucoseRangeCount, id: \.self) { range in
-                glucoseRangeRow(glucoseRangeLabel(range, bounds: bounds), range: range < ranges.count ? ranges[range] : nil, state: state, format: format)
-            }
-        }
-    }
-
-    private func glucoseRangeLabel(_ range: Int, bounds: [String]) -> String {
-        if range == 0 {
-            return "< \(bounds[0])"
-        }
-        if range == bounds.count {
-            return "> \(bounds[bounds.count - 1])"
-        }
-        return "\(bounds[range - 1])–\(bounds[range])"
-    }
-
-    private func glucoseRangeRow(_ title: String, range: TherapyOptimizerGlucoseRangeSensitivity?, state: TherapyOptimizerState, format: String) -> some View {
-        let dataDays = range?.dataDays ?? 0
-        return HStack {
-            Text(title)
-                .frame(width: 80, alignment: .leading)
-            Spacer()
-            Text(range?.factor.map { String(format: "%+.0f %%", ($0 - 1) * 100) } ?? "–")
-                .bold()
-                .frame(minWidth: 56, alignment: .trailing)
-            Text(range?.sensitivity.map { String(format: format, state.displaySensitivity($0)) } ?? "–")
-                .foregroundColor(.secondary)
-                .frame(minWidth: 48, alignment: .trailing)
-            Text("\(dataDays)")
-                .foregroundColor(.secondary)
-                .frame(minWidth: 24, alignment: .trailing)
-        }
-        .font(.footnote.monospacedDigit())
-        .opacity(dataDays >= TherapyOptimizerEngine.reliableHourDataDays ? 1 : 0.5)
-    }
-
     private func valueRow(_ title: String, _ value: String) -> some View {
         HStack {
             Text(title)
@@ -181,6 +129,7 @@ struct CalculatedProfileChange {
 struct CalculatedValuesSections: View {
     let state: TherapyOptimizerState
     let profile: TherapyProfile
+    @ObservedObject var profiles: TherapyProfilesModel
     @Binding var pendingChange: CalculatedProfileChange?
     @Binding var message: String?
 
@@ -195,7 +144,73 @@ struct CalculatedValuesSections: View {
         let carbRatio = TherapyOptimizerMath.hourlyValues(profile.carbRatioSchedule.items).map { $0 / factor }
         basalSection(basal)
         sensitivitySection(sensitivity)
+        sensitivityByGlucoseSection(profileSensitivity: Self.mean(sensitivity))
         carbRatioSection(carbRatio)
+    }
+
+    /// The calculated factor per glucose range, shown on this profile's sensitivity.
+    private func sensitivityByGlucoseSection(profileSensitivity: Double) -> some View {
+        let format = state.sensitivityUnit == .milligramsPerDeciliter ? "%.0f" : "%.1f"
+        let bounds = TherapyOptimizerEngine.glucoseRangeUpperBounds.map { String(format: format, state.displaySensitivity($0)) }
+        let ranges = state.sensitivityByGlucose ?? []
+        let limits = TherapyOptimizerEngine.dosingSensitivityFactorRange
+        return Section(
+            header: VStack(alignment: .leading, spacing: 2) {
+                Text(NSLocalizedString("Insulin Sensitivity by Glucose", comment: "Header of the insulin sensitivity by glucose range table"))
+                Text(NSLocalizedString("Glucose · Change · Sensitivity · Days", comment: "Column legend of the insulin sensitivity by glucose range table"))
+                    .font(.caption2)
+            },
+            footer: Text(NSLocalizedString("Change observed in each glucose range relative to your overall insulin sensitivity, e.g. −15 % means insulin works 15 % less there; it updates with the calculation. Sensitivity shows this profile's all-day value with the change. With “Use for Corrections” on and this profile active, corrections and bolus recommendations use the profile's insulin sensitivity at that time with the change (limited to ±20 %, only ranges with at least 3 days of data, never below 70 mg/dL). The profile's values and forecasts are not changed; switch off any time.", comment: "Footer of the insulin sensitivity by glucose range table"))
+        ) {
+            Toggle(NSLocalizedString("Use for Corrections", comment: "Switch that applies the glucose-dependent insulin sensitivity to correction dosing"), isOn: Binding(
+                get: { profile.usesGlucoseDependentSensitivity == true },
+                set: { enabled in
+                    guard var latest = profiles.profile(withID: profile.id) else { return }
+                    latest.usesGlucoseDependentSensitivity = enabled ? true : nil
+                    profiles.save(latest)
+                }
+            ))
+            glucoseRangeRow(NSLocalizedString("Profile", comment: "Row with the profile's all-day insulin sensitivity the glucose ranges are applied to"), change: nil, sensitivity: profileSensitivity, dataDays: state.sensitivityByGlucoseReference?.dataDays ?? 0, format: format)
+            ForEach(0..<TherapyOptimizerEngine.glucoseRangeCount, id: \.self) { index in
+                let range = index < ranges.count ? ranges[index] : nil
+                glucoseRangeRow(
+                    glucoseRangeLabel(index, bounds: bounds),
+                    change: range?.factor,
+                    sensitivity: range?.factor.map { profileSensitivity * min(max($0, limits.lowerBound), limits.upperBound) },
+                    dataDays: range?.dataDays ?? 0,
+                    format: format
+                )
+            }
+        }
+    }
+
+    private func glucoseRangeLabel(_ range: Int, bounds: [String]) -> String {
+        if range == 0 {
+            return "< \(bounds[0])"
+        }
+        if range == bounds.count {
+            return "> \(bounds[bounds.count - 1])"
+        }
+        return "\(bounds[range - 1])–\(bounds[range])"
+    }
+
+    private func glucoseRangeRow(_ title: String, change: Double?, sensitivity: Double?, dataDays: Int, format: String) -> some View {
+        HStack {
+            Text(title)
+                .frame(width: 80, alignment: .leading)
+            Spacer()
+            Text(change.map { String(format: "%+.0f %%", ($0 - 1) * 100) } ?? "")
+                .bold()
+                .frame(minWidth: 56, alignment: .trailing)
+            Text(sensitivity.map { String(format: format, state.displaySensitivity($0)) } ?? "–")
+                .foregroundColor(.secondary)
+                .frame(minWidth: 48, alignment: .trailing)
+            Text("\(dataDays)")
+                .foregroundColor(.secondary)
+                .frame(minWidth: 24, alignment: .trailing)
+        }
+        .font(.footnote.monospacedDigit())
+        .opacity(dataDays >= TherapyOptimizerEngine.reliableHourDataDays ? 1 : 0.5)
     }
 
     private func basalSection(_ reference: [Double]) -> some View {
