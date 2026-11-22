@@ -244,20 +244,13 @@ final class WatchDataManager: NSObject {
             let updateGroup = DispatchGroup()
 
             let carbsOnBoard = state.carbsOnBoard
-            var insulinEffectInput = InsulinEffectMonitorInput(
-                now: Date(),
-                state: state,
-                insulinSensitivity: manager.insulinSensitivityScheduleApplyingOverrideHistory,
-                carbRatio: manager.carbRatioScheduleApplyingOverrideHistory
-            )
 
             let context = WatchContext(glucose: glucose, glucoseUnit: self.deviceManager.preferredGlucoseUnit)
             context.reservoir = reservoir?.unitVolume
             context.loopLastRunDate = manager.lastLoopCompleted
-            if let rawState = self.deviceManager.rawPumpManager?["state"] as? [String: Any] {
-                context.podWakeUpCount = rawState["podWakeUpCount"] as? Int
-                context.lastPodWakeUpDate = rawState["lastPodWakeUpDate"] as? Date
-            }
+            let podStatus = PodStatus(rawPumpManager: self.deviceManager.rawPumpManager)
+            context.podWakeUpCount = podStatus.wakeUpCount
+            context.lastPodWakeUpDate = podStatus.lastWakeUpDate
             context.cob = carbsOnBoard?.quantity.doubleValue(for: HKUnit.gram())
 
             if let glucoseDisplay = self.deviceManager.glucoseDisplay(for: glucose) {
@@ -272,7 +265,6 @@ final class WatchDataManager: NSObject {
             let settings = self.deviceManager.loopManager.settings
 
             context.isClosedLoop = settings.dosingEnabled
-            context.loopInterval = settings.effectiveLoopInterval
 
             context.potentialCarbEntry = potentialCarbEntry
             if let recommendedBolus = try? state.recommendBolus(consideringPotentialCarbEntry: potentialCarbEntry, replacingCarbEntry: nil, considerPositiveVelocityAndRC: FeatureFlags.usePositiveMomentumAndRCForManualBoluses)
@@ -295,7 +287,6 @@ final class WatchDataManager: NSObject {
                     case .success(let samples):
                         sample = samples.last
                         historicalGlucose = samples.filter { $0.startDate >= historicalGlucoseStartDate }.map { HistoricalGlucoseValue(startDate: $0.startDate, quantity: $0.quantity) }
-                        insulinEffectInput.readings = InsulinEffectMonitorInput.readings(from: samples, now: insulinEffectInput.now)
                     }
                     context.glucose = sample?.quantity
                     context.glucoseDate = sample?.startDate
@@ -348,7 +339,7 @@ final class WatchDataManager: NSObject {
                 context.eventualGlucoseDisplayTier = settings.glucoseDisplayTier(forPredicted: eventual.quantity, at: eventual.startDate)
             }
 
-            let insulinEffectLevel = InsulinEffectMonitor.assess(insulinEffectInput, settings: UserDefaults.standard.insulinEffectMonitorSettings).level
+            let insulinEffectLevel = manager.insulinEffectAssessment.level
             context.insulinEffectLevel = insulinEffectLevel.isWarning ? insulinEffectLevel : nil
             if let activeProfile = TherapyProfile.activeProfile(), activeProfile.isConcentrated {
                 context.insulinConcentrationLabel = activeProfile.concentration.label

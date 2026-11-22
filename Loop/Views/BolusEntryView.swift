@@ -497,9 +497,9 @@ struct LabelBackground: ViewModifier {
     }
 }
 
-/// "U200" capsule while a concentrated-insulin profile is active; nothing for U100.
+/// "U200" capsule for concentrated insulin, by default that of the active profile; nothing for U100.
 struct InsulinConcentrationBadge: View {
-    private let concentration = TherapyProfile.activeProfile()?.concentration ?? .u100
+    var concentration = TherapyProfile.activeProfile()?.concentration ?? .u100
 
     var body: some View {
         if concentration != .u100 {

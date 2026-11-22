@@ -420,6 +420,13 @@ public final class InsulinDeliveryTableViewController: UITableViewController {
         }
     }
 
+    public override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        guard UserDefaults.standard.insulinConcentrationChanges.contains(where: { $0.concentration != .u100 }) else {
+            return nil
+        }
+        return NSLocalizedString("All amounts are pump units, not international units (IU).", comment: "Header of the insulin delivery list once concentrated insulin has been used")
+    }
+
     public override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch values {
         case .reservoir(let values):

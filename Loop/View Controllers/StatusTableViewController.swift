@@ -447,7 +447,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
         // This should be kept up to date immediately
         hudView?.loopCompletionHUD.lastLoopCompleted = deviceManager.loopManager.lastLoopCompleted
-        hudView?.loopCompletionHUD.loopInterval = deviceManager.loopManager.settings.effectiveLoopInterval
 
         guard !reloading && !deviceManager.authorizationRequired else {
             return
@@ -486,8 +485,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
         var totalDelivery: Double?
         var cobValues: [CarbValue]?
         var carbsOnBoard: HKQuantity?
-        var insulinEffectInput: InsulinEffectMonitorInput?
-        var insulinEffectSamples: [StoredGlucoseSample] = []
         let startDate = charts.startDate
         let basalDeliveryState = self.basalDeliveryState
         let automaticDosingEnabled = automaticDosingStatus.automaticDosingEnabled
@@ -539,21 +536,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
             // always check for cob
             carbsOnBoard = state.carbsOnBoard?.quantity
 
-            insulinEffectInput = InsulinEffectMonitorInput(
-                now: Date(),
-                state: state,
-                insulinSensitivity: manager.insulinSensitivityScheduleApplyingOverrideHistory,
-                carbRatio: manager.carbRatioScheduleApplyingOverrideHistory
-            )
-
-            reloadGroup.leave()
-        }
-
-        reloadGroup.enter()
-        deviceManager.glucoseStore.getGlucoseSamples(start: Date().addingTimeInterval(-InsulinEffectMonitor.lookback), end: nil) { (result) -> Void in
-            if case .success(let samples) = result {
-                insulinEffectSamples = samples
-            }
             reloadGroup.leave()
         }
 
@@ -722,10 +704,7 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
             self.redrawCharts()
 
-            if var input = insulinEffectInput {
-                input.readings = InsulinEffectMonitorInput.readings(from: insulinEffectSamples, now: input.now)
-                self.insulinEffectAssessment = InsulinEffectMonitor.assess(input, settings: UserDefaults.standard.insulinEffectMonitorSettings)
-            }
+            self.insulinEffectAssessment = self.deviceManager.loopManager.insulinEffectAssessment
 
             self.tableView.endUpdates()
 
@@ -1297,7 +1276,12 @@ final class StatusTableViewController: LoopChartsTableViewController {
 
                 if  let total = totalDelivery,
                     let totalString = integerFormatter.string(from: total) {
-                    cell.setSubtitleLabel(label: String(format: NSLocalizedString("%@ U Total", comment: "The subtitle format describing total insulin. (1: localized insulin total)"), totalString))
+                    let concentration = InsulinConcentrationHistory.current
+                    if concentration == .u100 {
+                        cell.setSubtitleLabel(label: String(format: NSLocalizedString("%@ U Total", comment: "The subtitle format describing total insulin. (1: localized insulin total)"), totalString))
+                    } else {
+                        cell.setSubtitleLabel(label: String(format: NSLocalizedString("%1$@ U Total (%2$@ pump units)", comment: "The subtitle format describing total insulin while concentrated insulin is in use. (1: localized insulin total, 2: insulin concentration, e.g. U200)"), totalString, concentration.label))
+                    }
                 } else {
                     cell.setSubtitleLabel(label: nil)
                 }
@@ -1751,8 +1735,8 @@ final class StatusTableViewController: LoopChartsTableViewController {
                                           initialDosingEnabled: deviceManager.loopManager.settings.dosingEnabled,
                                           isClosedLoopAllowed: automaticDosingStatus.$isAutomaticDosingAllowed,
                                           automaticDosingStrategy: deviceManager.loopManager.settings.automaticDosingStrategy,
-                                          initialCustomLoopIntervalEnabled: deviceManager.loopManager.settings.customLoopIntervalEnabled,
-                                          initialCustomLoopIntervalMinutes: deviceManager.loopManager.settings.customLoopInterval.minutes,
+                                          initialPodCommunicationIntervalEnabled: deviceManager.loopManager.settings.podCommunicationIntervalEnabled,
+                                          initialPodCommunicationIntervalMinutes: deviceManager.loopManager.settings.podCommunicationInterval.minutes,
                                           initialSuppressPodCommunicationInBackground: deviceManager.loopManager.settings.suppressPodCommunicationInBackground,
                                           initialGlucoseDisplayRange: deviceManager.loopManager.settings.glucoseDisplayRange,
                                           availableSupports: supportManager.availableSupports,
@@ -1820,7 +1804,6 @@ final class StatusTableViewController: LoopChartsTableViewController {
             hudView.loopCompletionHUD.stateColors = .loopStatus
             hudView.loopCompletionHUD.loopIconClosed = automaticDosingStatus.automaticDosingEnabled
             hudView.loopCompletionHUD.lastLoopCompleted = deviceManager.loopManager.lastLoopCompleted
-            hudView.loopCompletionHUD.loopInterval = deviceManager.loopManager.settings.effectiveLoopInterval
 
             hudView.cgmStatusHUD.stateColors = .cgmStatus
             hudView.cgmStatusHUD.tintColor = .label
@@ -2349,15 +2332,15 @@ extension StatusTableViewController: SettingsViewModelDelegate {
         }
     }
 
-    func customLoopIntervalEnabledChanged(_ enabled: Bool) {
+    func podCommunicationIntervalEnabledChanged(_ enabled: Bool) {
         deviceManager.loopManager.mutateSettings { settings in
-            settings.customLoopIntervalEnabled = enabled
+            settings.podCommunicationIntervalEnabled = enabled
         }
     }
 
-    func customLoopIntervalChanged(_ interval: TimeInterval) {
+    func podCommunicationIntervalChanged(_ interval: TimeInterval) {
         deviceManager.loopManager.mutateSettings { settings in
-            settings.customLoopInterval = LoopSettings.clampedCustomLoopInterval(interval)
+            settings.podCommunicationInterval = LoopSettings.clampedPodCommunicationInterval(interval)
         }
     }
 

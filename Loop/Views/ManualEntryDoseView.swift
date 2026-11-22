@@ -143,7 +143,7 @@ struct ManualEntryDoseView: View {
     private var penUnitsNote: some View {
         let concentration = InsulinConcentrationHistory.current
         let pumpUnits = enteredBolusAmount / concentration.unitsPerPumpUnit
-        return Text(String(format: NSLocalizedString("Enter U100 pen units. Loop records %@ %@ pump units.", comment: "Note on the dose logging screen while concentrated insulin is in the pump (1: pump units, 2: insulin label, e.g. U200)"), Self.doseAmountFormatter.string(from: pumpUnits) ?? "", concentration.label))
+        return Text(String(format: NSLocalizedString("Enter the dose in international units (IU), as on a U100 pen. Loop records it as %1$@ pump units of %2$@ insulin.", comment: "Note on the dose logging screen while concentrated insulin is in the pump (1: pump units, 2: insulin label, e.g. U200)"), Self.doseAmountFormatter.string(from: pumpUnits) ?? "", concentration.label))
             .font(.footnote)
             .foregroundColor(.secondary)
     }

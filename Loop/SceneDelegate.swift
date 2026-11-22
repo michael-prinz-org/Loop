@@ -71,6 +71,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, WindowProvider {
 
     func sceneDidEnterBackground(_ scene: UIScene) {
         log.default(#function)
+
+        loopAppManager?.didEnterBackground()
     }
 
     // MARK: - UIWindowSceneDelegate - Deeplinking

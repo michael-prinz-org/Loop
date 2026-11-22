@@ -83,8 +83,9 @@ struct InsulinEffectDetailView: View {
                         valueRow(NSLocalizedString("Allowed for carbs", comment: "Insulin effect measurement label"), rate(assessment.carbAllowanceRate))
                         valueRow(NSLocalizedString("Above forecast (30 min)", comment: "Insulin effect measurement label"), glucose(assessment.discrepancy), signal: .aboveForecast)
                         valueRow(NSLocalizedString("Change in the last hour", comment: "Insulin effect measurement label"), glucose(assessment.hourChange), signal: .correctionNotWorking)
-                        valueRow(NSLocalizedString("Active insulin", comment: "Insulin effect measurement label"), assessment.insulinOnBoard.map { String(format: "%.1f U", $0) } ?? "–")
-                        valueRow(NSLocalizedString("Active carbs", comment: "Insulin effect measurement label"), assessment.carbsOnBoard.map { String(format: "%.0f g", $0) } ?? "–")
+                        valueRow(NSLocalizedString("Expected from insulin (1 h)", comment: "Insulin effect measurement label"), glucose(assessment.expectedHourDrop.map { -$0 }), signal: .correctionNotWorking)
+                        valueRow(NSLocalizedString("Active insulin", comment: "Insulin effect measurement label"), assessment.insulinOnBoard.map { String(format: "%.1f IU", locale: .current, $0) } ?? "–")
+                        valueRow(NSLocalizedString("Active carbs", comment: "Insulin effect measurement label"), assessment.carbsOnBoard.map { String(format: "%.0f g", locale: .current, $0) } ?? "–")
                     }
                 }
 
@@ -151,7 +152,7 @@ struct InsulinEffectMonitorSettingsView: View {
                 Toggle(NSLocalizedString("Insulin Effect Monitor", comment: "Switch that turns the insulin effect monitor on"), isOn: $store.settings.isEnabled)
             }
 
-            Section(footer: Text(NSLocalizedString("Lower values warn earlier but more often. \"Watch\" appears when one check is exceeded, \"Attention\" when they confirm each other or a correction does not lower glucose within an hour.", comment: "Footer of the insulin effect monitor thresholds"))) {
+            Section(footer: Text(NSLocalizedString("Lower values warn earlier but more often. A level is shown once it holds for two loop cycles in a row. \"Watch\" appears when one check is exceeded, \"Attention\" when they confirm each other or glucose above 180 mg/dL fell by at most a third of what the insulin of the last hour should have done. With more than 5 g of active carbs, at most \"Watch\".", comment: "Footer of the insulin effect monitor thresholds"))) {
                 picker(NSLocalizedString("Sensor rise beyond carbs", comment: "Insulin effect threshold label"), \.riseRateThreshold, options: stride(from: 0.5, through: 5, by: 0.25).map { $0 }) {
                     Self.rateLabel($0, unit: displayGlucosePreference.unit)
                 }
@@ -162,10 +163,10 @@ struct InsulinEffectMonitorSettingsView: View {
                     displayGlucosePreference.format(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: $0))
                 }
                 picker(NSLocalizedString("Minimum active insulin", comment: "Insulin effect threshold label"), \.minimumInsulinOnBoard, options: stride(from: 0.5, through: 5, by: 0.5).map { $0 }) {
-                    String(format: "%.1f U", $0)
+                    String(format: "%.1f IU", locale: .current, $0)
                 }
                 picker(NSLocalizedString("Carbs absorbed within", comment: "Insulin effect threshold label"), \.carbAllowanceMinutes, options: stride(from: 60, through: 360, by: 30).map { $0 }) {
-                    String(format: NSLocalizedString("%d min", comment: "Custom loop interval value in minutes (1: number of minutes)"), Int($0))
+                    String(format: NSLocalizedString("%d min", comment: "Duration in minutes (1: number of minutes)"), Int($0))
                 }
                 Button(NSLocalizedString("Reset to Defaults", comment: "Button that resets the insulin effect thresholds")) {
                     store.settings = InsulinEffectMonitorSettings(isEnabled: store.settings.isEnabled)
@@ -191,8 +192,8 @@ struct InsulinEffectMonitorSettingsView: View {
     static func rateLabel(_ milligramsPerDeciliterPerMinute: Double, unit: HKUnit) -> String {
         if unit == .millimolesPerLiter {
             let value = HKQuantity(unit: .milligramsPerDeciliter, doubleValue: milligramsPerDeciliterPerMinute).doubleValue(for: .millimolesPerLiter)
-            return String(format: NSLocalizedString("%.2f mmol/L/min", comment: "Glucose rate in mmol/L per minute (1: value)"), value)
+            return String(format: NSLocalizedString("%.2f mmol/L/min", comment: "Glucose rate in mmol/L per minute (1: value)"), locale: .current, value)
         }
-        return String(format: NSLocalizedString("%.1f mg/dL/min", comment: "Glucose rate in mg/dL per minute (1: value)"), milligramsPerDeciliterPerMinute)
+        return String(format: NSLocalizedString("%.1f mg/dL/min", comment: "Glucose rate in mg/dL per minute (1: value)"), locale: .current, milligramsPerDeciliterPerMinute)
     }
 }

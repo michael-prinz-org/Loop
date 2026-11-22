@@ -29,7 +29,6 @@ public struct GlucoseActivityAttributes: ActivityAttributes {
         // Loop circle
         public let isCloseLoop: Bool
         public let lastCompleted: Date?
-        public let loopInterval: TimeInterval?
         
         // Bottom row
         public let bottomRow: [BottomRowItem]

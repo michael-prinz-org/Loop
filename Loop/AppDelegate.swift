@@ -38,30 +38,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // MARK: - UIApplicationDelegate - Scene Configuration
 
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        log.default(#function)
-
-        loopAppManager.didBecomeActive()
-    }
-
-    func applicationWillResignActive(_ application: UIApplication) {
-        log.default(#function)
-    }
-
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        log.default(#function)
-
-        loopAppManager.didEnterBackground()
-    }
-
-    func applicationWillEnterForeground(_ application: UIApplication) {
-        log.default(#function)
-        
-        loopAppManager.askUserToConfirmLoopReset()
-    }
-
-    func applicationWillTerminate(_ application: UIApplication) {
-        log.default(#function)
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
 
     // MARK: - UIApplicationDelegate - Environment
@@ -72,10 +50,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
                 self.loopAppManager.launch()
             }
         }
-    }
-
-     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        return UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
     }
 
     // MARK: - UIApplicationDelegate - Remote Notification

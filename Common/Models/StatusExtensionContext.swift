@@ -297,8 +297,6 @@ struct StatusExtensionContext: RawRepresentable {
     var lastLoopCompleted: Date?
     var createdAt: Date?
     var isClosedLoop: Bool?
-    /// Expected interval between loop cycles, used to scale loop-status freshness.
-    var loopInterval: TimeInterval?
     var preMealPresetAllowed: Bool?
     var preMealPresetActive: Bool?
     var customPresetActive: Bool?
@@ -331,7 +329,6 @@ struct StatusExtensionContext: RawRepresentable {
         lastLoopCompleted = rawValue["lastLoopCompleted"] as? Date
         createdAt = rawValue["createdAt"] as? Date
         isClosedLoop = rawValue["isClosedLoop"] as? Bool
-        loopInterval = rawValue["loopInterval"] as? TimeInterval
         preMealPresetAllowed = rawValue["preMealPresetAllowed"] as? Bool
         preMealPresetActive = rawValue["preMealPresetActive"] as? Bool
         customPresetActive = rawValue["customPresetActive"] as? Bool
@@ -373,7 +370,6 @@ struct StatusExtensionContext: RawRepresentable {
         raw["lastLoopCompleted"] = lastLoopCompleted
         raw["createdAt"] = createdAt
         raw["isClosedLoop"] = isClosedLoop
-        raw["loopInterval"] = loopInterval
         raw["preMealPresetAllowed"] = preMealPresetAllowed
         raw["preMealPresetActive"] = preMealPresetActive
         raw["customPresetActive"] = customPresetActive

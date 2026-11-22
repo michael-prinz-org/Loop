@@ -644,4 +644,197 @@ class LoopDataManagerDosingTests: LoopDataManagerTests {
         XCTAssertEqual(insulinOnBoard?.value, 9.5)
     }
 
+    // MARK: - Use for Corrections (glucose-dependent sensitivity, Variant B)
+
+    private func recommendations(for scenario: DosingTestScenario, strategy: AutomaticDosingStrategy = .tempBasalOnly, factor: Double?) -> (automatic: AutomaticDoseRecommendation?, manualBolus: Double?) {
+        setUp(for: scenario, dosingStrategy: strategy, glucoseDependentSensitivityFactor: { _, _ in factor })
+        return currentRecommendations()
+    }
+
+    private func currentRecommendations() -> (automatic: AutomaticDoseRecommendation?, manualBolus: Double?) {
+        let exp = expectation(description: #function)
+        var automatic: AutomaticDoseRecommendation?
+        var manualBolus: Double?
+        loopDataManager.getLoopState { _, state in
+            automatic = state.recommendedAutomaticDose?.recommendation
+            manualBolus = (try? state.recommendBolus(consideringPotentialCarbEntry: nil, replacingCarbEntry: nil, considerPositiveVelocityAndRC: true))?.amount
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 10.0)
+        return (automatic, manualBolus)
+    }
+
+    /// Cap for the high-and-rising-with-COB fixture: glucose 129.93, correction range 90–100, ISF 55.
+    private func risingWithCarbsCap(factor: Double) -> Double {
+        GlucoseDependentSensitivity.cap(glucose: 129.93174411197853, correctionRangeMidpoint: 95, sensitivity: 55, factor: factor)
+    }
+
+    func testUseForCorrectionsOffKeepsRecommendations() {
+        let savedProfiles = UserDefaults.standard.therapyProfiles
+        let savedActiveID = UserDefaults.standard.activeTherapyProfileID
+        defer {
+            UserDefaults.standard.therapyProfiles = savedProfiles
+            UserDefaults.standard.activeTherapyProfileID = savedActiveID
+        }
+        let profile = TherapyProfile(
+            name: "Test",
+            basalRateSchedule: loadBasalRateScheduleFixture("basal_profile"),
+            carbRatioSchedule: CarbRatioSchedule(unit: .gram(), dailyItems: [RepeatingScheduleValue(startTime: 0, value: 10)], timeZone: .utcTimeZone)!,
+            insulinSensitivitySchedule: InsulinSensitivitySchedule(unit: .milligramsPerDeciliter, dailyItems: [RepeatingScheduleValue(startTime: 0, value: 45)], timeZone: .utcTimeZone)!
+        )
+        UserDefaults.standard.therapyProfiles = [profile]
+        UserDefaults.standard.activeTherapyProfileID = profile.id
+        XCTAssertNil(GlucoseDependentSensitivity.activeFactor(forGlucose: 200, at: Date()))
+
+        // Default wiring: the active profile's switch decides.
+        setUp(for: .highAndStable)
+        let off = currentRecommendations()
+        XCTAssertEqual(off.automatic?.basalAdjustment?.unitsPerHour ?? -1, 4.63, accuracy: defaultAccuracy)
+        XCTAssertEqual(off.manualBolus ?? -1, 1.82, accuracy: 0.01)
+    }
+
+    func testUseForCorrectionsManualBolusWithCarbsChangesOnlyCorrectionShare() {
+        let off = recommendations(for: .highAndRisingWithCOB, factor: nil)
+        let on = recommendations(for: .highAndRisingWithCOB, factor: 0.8)
+        let cap = risingWithCarbsCap(factor: 0.8)
+        XCTAssertGreaterThan(cap, 0)
+        // Scaling the whole dose would add about 0.4 U; only the correction share may be added.
+        XCTAssertEqual(on.manualBolus! - off.manualBolus!, cap, accuracy: 1e-9)
+    }
+
+    func testUseForCorrectionsFactorAboveOneReducesOnlyCorrectionShare() {
+        let off = recommendations(for: .highAndRisingWithCOB, factor: nil)
+        let on = recommendations(for: .highAndRisingWithCOB, factor: 1.25)
+        XCTAssertEqual(off.manualBolus! - on.manualBolus!, risingWithCarbsCap(factor: 1.25), accuracy: 1e-9)
+    }
+
+    func testUseForCorrectionsTempBasalCappedInUnits() {
+        let off = recommendations(for: .highAndRisingWithCOB, factor: nil)
+        let on = recommendations(for: .highAndRisingWithCOB, factor: 0.8)
+        let standardRate = off.automatic!.basalAdjustment!.unitsPerHour
+        let rate = on.automatic!.basalAdjustment!.unitsPerHour
+        XCTAssertEqual(standardRate, 4.25, accuracy: 0.05)
+        XCTAssertEqual((rate - standardRate) * 0.5, risingWithCarbsCap(factor: 0.8), accuracy: 1e-9)
+        XCTAssertLessThanOrEqual(rate, 5.0)
+    }
+
+    func testUseForCorrectionsAutomaticBolusCapped() {
+        let off = recommendations(for: .highAndRisingWithCOB, strategy: .automaticBolus, factor: nil)
+        let on = recommendations(for: .highAndRisingWithCOB, strategy: .automaticBolus, factor: 0.8)
+        let deviation = on.automatic!.bolusUnits! - off.automatic!.bolusUnits!
+        XCTAssertGreaterThan(deviation, 0)
+        XCTAssertLessThanOrEqual(deviation, risingWithCarbsCap(factor: 0.8) + 1e-9)
+    }
+
+    func testUseForCorrectionsBelowMidpointKeepsStandard() {
+        for strategy in [AutomaticDosingStrategy.tempBasalOnly, .automaticBolus] {
+            let off = recommendations(for: .lowWithLowTreatment, strategy: strategy, factor: nil)
+            let on = recommendations(for: .lowWithLowTreatment, strategy: strategy, factor: 0.8)
+            XCTAssertEqual(on.automatic, off.automatic)
+            XCTAssertEqual(on.manualBolus, off.manualBolus)
+        }
+        XCTAssertEqual(GlucoseDependentSensitivity.cap(glucose: 105, correctionRangeMidpoint: 105, sensitivity: 45, factor: 0.8), 0)
+        XCTAssertEqual(GlucoseDependentSensitivity.cap(glucose: 90, correctionRangeMidpoint: 105, sensitivity: 45, factor: 1.2), 0)
+    }
+
+    func testUseForCorrectionsCap() {
+        XCTAssertEqual(GlucoseDependentSensitivity.cap(glucose: 200, correctionRangeMidpoint: 100, sensitivity: 50, factor: 0.8), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(GlucoseDependentSensitivity.cap(glucose: 200, correctionRangeMidpoint: 100, sensitivity: 50, factor: 1.25), 0.4, accuracy: 1e-9)
+    }
+
+    func testUseForCorrectionsMealBolusScalesOnlyCorrectionShare() {
+        // 4 U for carbs plus 2 U correcting 200 to 100 mg/dL at ISF 50; factor 0.8 scales the whole dose to 7.5 U.
+        let bolus = GlucoseDependentSensitivity.limitedBolus(standard: 6, scaled: 7.5, cap: 0.5, volumeRounder: nil)
+        XCTAssertEqual(bolus, 6.5, accuracy: 1e-9)
+        let reduced = GlucoseDependentSensitivity.limitedBolus(standard: 6, scaled: 4.8, cap: 0.4, volumeRounder: nil)
+        XCTAssertEqual(reduced, 5.6, accuracy: 1e-9)
+        XCTAssertEqual(GlucoseDependentSensitivity.limitedBolus(standard: 2, scaled: 2.3, cap: 0.5, volumeRounder: nil), 2.3)
+    }
+
+    func testUseForCorrectionsTempBasalDeviationInUnits() {
+        let now = Date()
+        let standard = TempBasalRecommendation(unitsPerHour: 2.0, duration: .minutes(30))
+        let scaled = TempBasalRecommendation(unitsPerHour: 4.0, duration: .minutes(30))
+        // 2 U/h more for 30 minutes is 1 U; the cap of 0.5 U allows 1 U/h more.
+        let limited = GlucoseDependentSensitivity.limitedTempBasal(standard: standard, scaled: scaled, cap: 0.5, scheduledBasalRate: 1.0, lastTempBasal: nil, at: now, rateRounder: nil)
+        XCTAssertEqual(limited, TempBasalRecommendation(unitsPerHour: 3.0, duration: .minutes(30)))
+
+        // No new temp keeps the running 2 U/h; 2.6 U/h is 0.3 U more, within the cap.
+        let small = TempBasalRecommendation(unitsPerHour: 2.6, duration: .minutes(30))
+        XCTAssertEqual(GlucoseDependentSensitivity.limitedTempBasal(standard: nil, scaled: small, cap: 0.5, scheduledBasalRate: 1.0, lastTempBasal: runningTemp(2.0, at: now), at: now, rateRounder: nil), small)
+
+        // Cancel returns to scheduled basal: 1 U/h less than 3 U/h is 0.5 U, capped to 0.2 U.
+        let reduced = GlucoseDependentSensitivity.limitedTempBasal(standard: TempBasalRecommendation(unitsPerHour: 3.0, duration: .minutes(30)), scaled: .cancel, cap: 0.2, scheduledBasalRate: 2.0, lastTempBasal: nil, at: now, rateRounder: nil)
+        XCTAssertEqual(reduced!.unitsPerHour, 2.6, accuracy: 1e-9)
+    }
+
+    func testUseForCorrectionsAutomaticDoseSharesCap() {
+        let now = Date()
+        let standard = AutomaticDoseRecommendation(basalAdjustment: nil, bolusUnits: 1.0)
+        let scaled = AutomaticDoseRecommendation(basalAdjustment: nil, bolusUnits: 2.0)
+        let limited = GlucoseDependentSensitivity.limitedAutomaticDose(standard: standard, scaled: scaled, cap: 0.5, scheduledBasalRate: 1.0, lastTempBasal: nil, at: now, volumeRounder: nil, rateRounder: nil)
+        XCTAssertEqual(limited?.bolusUnits ?? 0, 1.5, accuracy: 1e-9)
+        XCTAssertNil(limited?.basalAdjustment)
+        XCTAssertEqual(GlucoseDependentSensitivity.limitedAutomaticDose(standard: standard, scaled: standard, cap: 0.5, scheduledBasalRate: 1.0, lastTempBasal: nil, at: now, volumeRounder: nil, rateRounder: nil), standard)
+    }
+
+    // MARK: - Automatic dose urgency
+
+    private func runningTemp(_ unitsPerHour: Double, at now: Date) -> DoseEntry {
+        DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(.minutes(-10)), endDate: now.addingTimeInterval(.minutes(20)), value: unitsPerHour, unit: .unitsPerHour)
+    }
+
+    private func urgency(_ recommendation: AutomaticDoseRecommendation?, runningTemp: DoseEntry?, at now: Date) -> AutomaticDoseUrgency {
+        AutomaticDoseUrgency(recommendation: recommendation, runningTempBasal: runningTemp, scheduledBasalRate: 1.0, at: now)
+    }
+
+    func testUrgencySuspendIsUrgent() {
+        let now = Date()
+        let suspend = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: 0, duration: .minutes(30)))
+        XCTAssertEqual(urgency(suspend, runningTemp: nil, at: now), .urgent)
+        XCTAssertEqual(urgency(suspend, runningTemp: runningTemp(0.6, at: now), at: now), .urgent)
+    }
+
+    func testUrgencyStoppingHighTempIsUrgent() {
+        let now = Date()
+        let cancel = AutomaticDoseRecommendation(basalAdjustment: .cancel)
+        XCTAssertEqual(urgency(cancel, runningTemp: runningTemp(2.5, at: now), at: now), .urgent)
+        let lower = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: 1.5, duration: .minutes(30)))
+        XCTAssertEqual(urgency(lower, runningTemp: runningTemp(2.5, at: now), at: now), .urgent)
+    }
+
+    func testUrgencyModerateReductionCanWait() {
+        let now = Date()
+        let reduction = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: 0.4, duration: .minutes(30)))
+        XCTAssertEqual(urgency(reduction, runningTemp: nil, at: now), .canWait)
+        XCTAssertEqual(urgency(reduction, runningTemp: runningTemp(0.8, at: now), at: now), .canWait)
+    }
+
+    func testUrgencyIncreaseCanWait() {
+        let now = Date()
+        let increase = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: 2.0, duration: .minutes(30)))
+        XCTAssertEqual(urgency(increase, runningTemp: nil, at: now), .canWait)
+        XCTAssertEqual(urgency(increase, runningTemp: runningTemp(0, at: now), at: now), .canWait)
+        // Ending a zero temp returns to scheduled basal, which is an increase.
+        XCTAssertEqual(urgency(AutomaticDoseRecommendation(basalAdjustment: .cancel), runningTemp: runningTemp(0, at: now), at: now), .canWait)
+    }
+
+    func testUrgencyBolusCanWait() {
+        let now = Date()
+        XCTAssertEqual(urgency(AutomaticDoseRecommendation(basalAdjustment: nil, bolusUnits: 0.5), runningTemp: nil, at: now), .canWait)
+    }
+
+    func testUrgencyNoRecommendation() {
+        let now = Date()
+        XCTAssertEqual(urgency(nil, runningTemp: nil, at: now), .noDose)
+        XCTAssertEqual(urgency(AutomaticDoseRecommendation(basalAdjustment: nil, bolusUnits: 0), runningTemp: nil, at: now), .noDose)
+    }
+
+    func testUrgencyIgnoresExpiredTemp() {
+        let now = Date()
+        let expired = DoseEntry(type: .tempBasal, startDate: now.addingTimeInterval(.minutes(-40)), endDate: now.addingTimeInterval(.minutes(-10)), value: 2.5, unit: .unitsPerHour)
+        let lower = AutomaticDoseRecommendation(basalAdjustment: TempBasalRecommendation(unitsPerHour: 0.5, duration: .minutes(30)))
+        XCTAssertEqual(urgency(lower, runningTemp: expired, at: now), .canWait)
+    }
+
 }

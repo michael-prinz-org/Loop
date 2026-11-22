@@ -123,12 +123,11 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
             ]
             
             if let loopLastRunDate = context.loopLastRunDate {
-                let loopInterval = context.loopInterval ?? LoopCompletionFreshness.defaultLoopInterval
                 let freshnessCategories = [
                     LoopCompletionFreshness.fresh,
                     LoopCompletionFreshness.aging,
                     LoopCompletionFreshness.stale
-                    ].compactMap( { $0.maxAge(for: loopInterval) })
+                    ].compactMap( { $0.maxAge })
                 futureChangeDates.append(contentsOf: freshnessCategories.map { loopLastRunDate + $0 + 1})
             }
             
@@ -139,7 +138,9 @@ final class ComplicationController: NSObject, CLKComplicationDataSource {
                                                                             recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
                                                                             chartGenerator: self.makeChart)
                 {
-                    template.tintColor = UIColor.tintColor
+                    if complication.family != .graphicRectangular {
+                        template.tintColor = UIColor.tintColor
+                    }
                     self.log.default("Adding complication timeline entry for date %{public}@", String(describing: futureChangeDate))
                     return CLKComplicationTimelineEntry(date: futureChangeDate, complicationTemplate: template)
                 } else {

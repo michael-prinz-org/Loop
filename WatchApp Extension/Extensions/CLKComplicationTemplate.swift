@@ -33,13 +33,10 @@ extension CLKComplicationTemplate {
             eventualGlucose: context.eventualGlucose,
             at: date,
             loopLastRunDate: context.loopLastRunDate,
-            loopInterval: context.loopInterval ?? LoopCompletionFreshness.defaultLoopInterval,
             isClosedLoop: context.isClosedLoop,
             recencyInterval: recencyInterval,
             activeInsulin: context.activeInsulin,
-            activeCarbohydrates: context.activeCarbohydrates,
             glucoseDisplayTier: context.glucoseDisplayTier,
-            eventualGlucoseDisplayTier: context.eventualGlucoseDisplayTier,
             podWakeUpCount: context.podWakeUpCount,
             lastPodWakeUpDate: context.lastPodWakeUpDate,
             insulinEffectLevel: context.insulinEffectLevel,
@@ -55,13 +52,10 @@ extension CLKComplicationTemplate {
         eventualGlucose: HKQuantity?,
         at date: Date,
         loopLastRunDate: Date?,
-        loopInterval: TimeInterval = LoopCompletionFreshness.defaultLoopInterval,
         isClosedLoop: Bool? = nil,
         recencyInterval: TimeInterval,
         activeInsulin: HKQuantity? = nil,
-        activeCarbohydrates: HKQuantity? = nil,
         glucoseDisplayTier: GlucoseDisplayTier? = nil,
-        eventualGlucoseDisplayTier: GlucoseDisplayTier? = nil,
         podWakeUpCount: Int? = nil,
         lastPodWakeUpDate: Date? = nil,
         insulinEffectLevel: InsulinEffectLevel? = nil,
@@ -78,6 +72,10 @@ extension CLKComplicationTemplate {
         let trendString: String
         
         let isGlucoseStale = date.timeIntervalSince(glucoseDate) > recencyInterval
+        // Stale glucose must not look current: no trend, colour tier or insulin effect warning.
+        let trend = isGlucoseStale ? nil : trend
+        let glucoseDisplayTier = isGlucoseStale ? nil : glucoseDisplayTier
+        let insulinEffectLevel = isGlucoseStale ? nil : insulinEffectLevel
 
         if isGlucoseStale {
             glucoseString = NSLocalizedString("---", comment: "No glucose value representation (3 dashes for mg/dL; no spaces as this will get truncated in the watch complication)")
@@ -90,7 +88,7 @@ extension CLKComplicationTemplate {
             trendString = trend?.symbol ?? " "
         }
         
-        let loopCompletionFreshness = LoopCompletionFreshness(lastCompletion: loopLastRunDate, at: date, loopInterval: loopInterval)
+        let loopCompletionFreshness = LoopCompletionFreshness(lastCompletion: loopLastRunDate, at: date)
         
         let tintColor: UIColor
         
@@ -182,12 +180,9 @@ extension CLKComplicationTemplate {
                                                              eventualGlucose: eventualGlucose,
                                                              at: date,
                                                              loopLastRunDate: loopLastRunDate,
-                                                             loopInterval: loopInterval,
                                                              recencyInterval: recencyInterval,
                                                              activeInsulin: activeInsulin,
-                                                             activeCarbohydrates: activeCarbohydrates,
                                                              glucoseDisplayTier: glucoseDisplayTier,
-                                                             eventualGlucoseDisplayTier: eventualGlucoseDisplayTier,
                                                              chartGenerator: makeChart
                         ) as? CLKComplicationTemplateGraphicCircular
                 else {
@@ -200,16 +195,13 @@ extension CLKComplicationTemplate {
         case .graphicRectangular:
             if #available(watchOSApplicationExtension 5.0, *) {
                 return CLKComplicationTemplateGraphicRectangularLargeImage(
-                    textProvider: rectangularTextProvider(glucoseAndTrend: glucoseAndTrend,
-                                                          glucoseString: glucoseString,
-                                                          accessibilityLabel: accessibilityStrings.joined(separator: ", "),
+                    textProvider: rectangularTextProvider(glucoseString: glucoseString,
                                                           glucoseDisplayTier: glucoseDisplayTier,
                                                           trend: trend,
                                                           isClosedLoop: isClosedLoop,
                                                           loopStatusColor: tintColor,
                                                           activeInsulin: activeInsulin,
                                                           freshnessColor: tintColor,
-                                                          fallbackTimeText: timeText,
                                                           podWakeUpCount: podWakeUpCount,
                                                           lastPodWakeUpDate: lastPodWakeUpDate,
                                                           insulinEffectLevel: insulinEffectLevel),
@@ -243,16 +235,13 @@ extension CLKComplicationTemplate {
     /// Per-segment tint colors survive on `.graphicRectangular` because `ComplicationController` deliberately
     /// does not set a template-wide tint for that family.
     private static func rectangularTextProvider(
-        glucoseAndTrend: String,
         glucoseString: String,
-        accessibilityLabel: String,
         glucoseDisplayTier: GlucoseDisplayTier?,
         trend: GlucoseTrend?,
         isClosedLoop: Bool?,
         loopStatusColor: UIColor,
         activeInsulin: HKQuantity?,
         freshnessColor: UIColor,
-        fallbackTimeText: CLKTextProvider,
         podWakeUpCount: Int?,
         lastPodWakeUpDate: Date?,
         insulinEffectLevel: InsulinEffectLevel?
@@ -278,7 +267,7 @@ extension CLKComplicationTemplate {
 
         if let trend {
             let trendText = CLKSimpleTextProvider(text: trend.arrows, shortText: trend.arrows, accessibilityLabel: trend.localizedDescription)
-            trendText.tintColor = trend.complicationColor
+            trendText.tintColor = trend.displayTier.complicationColor
             providers.append(trendText)
         }
 
@@ -341,19 +330,6 @@ private extension InsulinEffectLevel {
         case .watch: return GlucoseDisplayTier.outOfRange.complicationColor
         case .attention: return GlucoseDisplayTier.urgent.complicationColor
         case .unknown, .normal: return nil
-        }
-    }
-}
-
-private extension GlucoseTrend {
-    var complicationColor: UIColor {
-        switch self {
-        case .flat:
-            return UIColor(red: 76 / 255, green: 217 / 255, blue: 100 / 255, alpha: 1)
-        case .up, .down:
-            return UIColor(red: 1, green: 149 / 255, blue: 0, alpha: 1)
-        case .upUp, .downDown, .upUpUp, .downDownDown:
-            return UIColor(red: 1, green: 59 / 255, blue: 48 / 255, alpha: 1)
         }
     }
 }

@@ -56,6 +56,9 @@ final class LoopDataManager {
 
     private let automaticDosingStatus: AutomaticDosingStatus
 
+    /// Factor for "Use for Corrections" at a glucose (mg/dL) and date; nil means standard dosing.
+    private let glucoseDependentSensitivityFactor: (_ glucose: Double, _ date: Date) -> Double?
+
     lazy private var cancellables = Set<AnyCancellable>()
 
     // References to registered notification center observers
@@ -92,9 +95,11 @@ final class LoopDataManager {
         now: @escaping () -> Date = { Date() },
         pumpInsulinType: InsulinType?,
         automaticDosingStatus: AutomaticDosingStatus,
-        trustedTimeOffset: @escaping () -> TimeInterval
+        trustedTimeOffset: @escaping () -> TimeInterval,
+        glucoseDependentSensitivityFactor: @escaping (_ glucose: Double, _ date: Date) -> Double? = GlucoseDependentSensitivity.activeFactor
     ) {
         self.analyticsServicesManager = analyticsServicesManager
+        self.glucoseDependentSensitivityFactor = glucoseDependentSensitivityFactor
         self.lockedLastLoopCompleted = Locked(lastLoopCompleted)
         self.lockedBasalDeliveryState = Locked(basalDeliveryState)
         self.lockedSettings = Locked(settings)
@@ -442,6 +447,12 @@ final class LoopDataManager {
     }
     private let lockedLastLoopCompleted: Locked<Date?>
 
+    /// Evaluated once per loop cycle; the status screen and the watch read this.
+    var insulinEffectAssessment: InsulinEffectAssessment {
+        lockedInsulinEffectAssessment.value
+    }
+    private let lockedInsulinEffectAssessment = Locked(InsulinEffectAssessment.unknown(at: .distantPast))
+
     fileprivate var lastLoopError: LoopError?
 
     /// A timeline of average velocity of glucose change counteracting predicted insulin effects
@@ -767,8 +778,8 @@ extension LoopDataManager {
     ///
     /// - Parameters:
     ///   - startDate: The date the dose was started at.
-    ///   - value: The number of international (U100 pen) units in the dose; stored in pump units.
-    ///   - insulinModel: The type of insulin model that should be used for the dose.
+    ///   - units: The number of international (U100 pen) units in the dose; stored in pump units.
+    ///   - insulinType: The type of insulin that should be used for the dose.
     func addManuallyEnteredDose(startDate: Date, units: Double, insulinType: InsulinType? = nil) {
         let syncIdentifier = Data(UUID().uuidString.utf8).hexadecimalString
         let pumpUnits = InsulinConcentrationHistory.pumpUnits(fromInternationalUnits: units, at: startDate)
@@ -849,7 +860,7 @@ extension LoopDataManager {
     ///
     /// - Parameter enactingAutomaticDose: When `false`, the cycle only updates predictions and
     ///   recommendations; the recommended dose is not sent to the pump. Callers use this to keep pump
-    ///   communication within the configured loop interval.
+    ///   communication within the pod communication interval.
     func loop(enactingAutomaticDose: Bool = true) {
 
         if let lastLoopCompleted, Date().timeIntervalSince(lastLoopCompleted) < .minutes(2) {
@@ -865,30 +876,41 @@ extension LoopDataManager {
         }
     }
 
-    /// Reports whether the loop currently recommends an actionable automatic dose — a temp basal change or
+    /// Reports whether and how urgently the loop recommends an automatic dose — a temp basal change or
     /// an automatic bolus — without enacting it and without advancing loop-completion state.
     ///
     /// Pump-data recency is intentionally not enforced, so a recommendation is produced even when pump data
-    /// is stale (as happens during a long custom loop interval). This lets the caller decide whether
+    /// is stale (as happens during a long pod communication interval). This lets the caller decide whether
     /// contacting the pump is warranted. The tolerant preview is discarded before returning so that the
     /// subsequent real loop recomputes from scratch and re-applies the normal pump-data recency check
     /// before any dose is enacted.
-    func isAutomaticDoseRecommended(_ completion: @escaping (_ isRecommended: Bool) -> Void) {
+    func automaticDoseUrgency(_ completion: @escaping (AutomaticDoseUrgency) -> Void) {
         dataAccessQueue.async {
             let (_, error) = self.update(for: .getLoopState, enactingAutomaticDose: false)
 
-            let isRecommended: Bool
-            if error == nil, self.lastRequestedBolus == nil, let recommendation = self.recommendedAutomaticDose?.recommendation {
-                isRecommended = recommendation.basalAdjustment != nil || (recommendation.bolusUnits ?? 0) > 0
+            let urgency: AutomaticDoseUrgency
+            if error == nil, self.lastRequestedBolus == nil, let scheduledBasalRate = self.settings.basalRateSchedule?.value(at: self.now()) {
+                let runningTempBasal: DoseEntry?
+                if case .some(.tempBasal(let dose)) = self.basalDeliveryState {
+                    runningTempBasal = dose
+                } else {
+                    runningTempBasal = nil
+                }
+                urgency = AutomaticDoseUrgency(
+                    recommendation: self.recommendedAutomaticDose?.recommendation,
+                    runningTempBasal: runningTempBasal,
+                    scheduledBasalRate: scheduledBasalRate,
+                    at: self.now()
+                )
             } else {
-                isRecommended = false
+                urgency = .noDose
             }
 
             // Discard the tolerant preview: this also clears predictedGlucose (and through its didSet
             // recommendedAutomaticDose), so nothing can read the preview and the real loop recomputes with recency enforced.
             self.clearCachedInsulinEffects()
 
-            completion(isRecommended)
+            completion(urgency)
         }
     }
 
@@ -943,6 +965,8 @@ extension LoopDataManager {
             loopDidComplete(date: date, dosingDecision: dosingDecision, duration: duration)
         }
 
+        updateInsulinEffectAssessment()
+
         logger.default("Loop ended")
         notify(forChange: .loopFinished)
 
@@ -996,6 +1020,31 @@ extension LoopDataManager {
         case loop
         case getLoopState
         case updateRemoteRecommendation
+    }
+
+    private func updateInsulinEffectAssessment() {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        let date = now()
+        var input = InsulinEffectMonitorInput(
+            now: date,
+            state: LoopStateView(loopDataManager: self, updateError: nil),
+            insulinSensitivity: insulinSensitivityScheduleApplyingOverrideHistory,
+            carbRatio: carbRatioScheduleApplyingOverrideHistory,
+            unitsPerPumpUnit: InsulinConcentrationHistory.current.unitsPerPumpUnit
+        )
+        let group = DispatchGroup()
+        group.enter()
+        glucoseStore.getGlucoseSamples(start: date.addingTimeInterval(-InsulinEffectMonitor.lookback), end: nil) { result in
+            if case .success(let samples) = result {
+                input.readings = InsulinEffectMonitorInput.readings(from: samples, now: date)
+            }
+            group.leave()
+        }
+        _ = group.wait(timeout: .distantFuture)
+
+        let assessment = InsulinEffectMonitor.assess(input, settings: UserDefaults.standard.insulinEffectMonitorSettings)
+        lockedInsulinEffectAssessment.mutate { $0 = InsulinEffectMonitor.persisting(assessment, after: $0) }
     }
 
     fileprivate func update(for reason: UpdateReason, enactingAutomaticDose: Bool = true) -> (StoredDosingDecision, LoopError?) {
@@ -1598,35 +1647,42 @@ extension LoopDataManager {
         }
         
         let model = doseStore.insulinModelProvider.model(for: pumpInsulinType)
+        let date = now()
 
-        return predictedGlucose.recommendedManualBolus(
-            to: glucoseTargetRange,
-            at: now(),
-            suspendThreshold: settings.suspendThreshold?.quantity,
-            sensitivity: correctionSensitivity(insulinSensitivity, at: predictedGlucose.first),
-            model: model,
-            pendingInsulin: 0, // Pending insulin is already reflected in the prediction
-            maxBolus: maxBolus,
-            volumeRounder: volumeRounder
-        )
+        let recommend = { (sensitivity: InsulinSensitivitySchedule) in
+            predictedGlucose.recommendedManualBolus(
+                to: glucoseTargetRange,
+                at: date,
+                suspendThreshold: self.settings.suspendThreshold?.quantity,
+                sensitivity: sensitivity,
+                model: model,
+                pendingInsulin: 0, // Pending insulin is already reflected in the prediction
+                maxBolus: maxBolus,
+                volumeRounder: volumeRounder
+            )
+        }
+
+        let standard = recommend(insulinSensitivity)
+        guard let correction = glucoseDependentCorrection(sensitivity: insulinSensitivity, correctionRange: glucoseTargetRange, glucose: predictedGlucose.first, at: date) else {
+            return standard
+        }
+        return GlucoseDependentSensitivity.limitedManualBolus(standard: standard, scaled: recommend(correction.sensitivity), cap: correction.cap, volumeRounder: volumeRounder)
     }
 
-    /// Insulin sensitivity for correction dosing (Dynamic-ISF style): when enabled, scaled by the factor observed for the
-    /// current glucose range. Predictions keep using the unscaled schedule.
-    private func correctionSensitivity<Sample: GlucoseValue>(_ schedule: InsulinSensitivitySchedule, at glucose: Sample?) -> InsulinSensitivitySchedule {
-        guard TherapyProfile.activeProfile()?.usesGlucoseDependentSensitivity == true,
-              let glucose = glucose,
-              let factor = TherapyOptimizer.shared.dosingSensitivityFactor(forGlucose: glucose.quantity.doubleValue(for: .milligramsPerDeciliter)),
-              abs(factor - 1) > 0.005,
-              let scaled = InsulinSensitivitySchedule(
-                unit: schedule.unit,
-                dailyItems: schedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: $0.value * factor) },
-                timeZone: schedule.timeZone
-              ) else {
-            return schedule
-        }
-        logger.default("Glucose-dependent insulin sensitivity factor %.2f at %{public}@", factor, glucose.quantity.description)
-        return scaled
+    /// Scaled sensitivity and the most it may change a dose (units), when "Use for Corrections" applies.
+    private func glucoseDependentCorrection<Sample: GlucoseValue>(sensitivity: InsulinSensitivitySchedule, correctionRange: GlucoseRangeSchedule, glucose: Sample?, at date: Date) -> (sensitivity: InsulinSensitivitySchedule, cap: Double)? {
+        guard let glucose = glucose else { return nil }
+        let glucoseValue = glucose.quantity.doubleValue(for: .milligramsPerDeciliter)
+        guard let factor = glucoseDependentSensitivityFactor(glucoseValue, date) else { return nil }
+        let cap = GlucoseDependentSensitivity.cap(
+            glucose: glucoseValue,
+            correctionRangeMidpoint: correctionRange.quantityRange(at: date).averageValue(for: .milligramsPerDeciliter),
+            sensitivity: sensitivity.quantity(at: date).doubleValue(for: .milligramsPerDeciliter),
+            factor: factor
+        )
+        guard cap > 0, let scaled = GlucoseDependentSensitivity.scaled(sensitivity, by: factor) else { return nil }
+        logger.default("Glucose-dependent insulin sensitivity factor %.2f at %{public}@, dose change limited to %.2f U", factor, glucose.quantity.description, cap)
+        return (scaled, cap)
     }
 
     /// Generates a correction effect based on how large the discrepancy is between the current glucose and its model predicted value.
@@ -1786,7 +1842,7 @@ extension LoopDataManager {
             if enforcePumpDataRecency {
                 errors.append(.pumpDataTooOld(date: pumpStatusDate))
             } else {
-                warnings.append(.pumpDataTooOldInOpenLoop(date: pumpStatusDate))
+                warnings.append(.pumpDataTooOldInDisplayOnlyCycle(date: pumpStatusDate))
             }
         }
 
@@ -1878,11 +1934,14 @@ extension LoopDataManager {
             }
 
             let dosingRecommendation: AutomaticDoseRecommendation?
-            let correctionSensitivity = self.correctionSensitivity(insulinSensitivity!, at: predictedGlucose.first)
 
             // automaticDosingIOBLimit calculated from the user entered maxBolus
             let automaticDosingIOBLimit = maxBolus! * 2.0
             let iobHeadroom = automaticDosingIOBLimit - self.insulinOnBoard!.value
+
+            let doseDate = predictedGlucose[0].startDate
+            let scheduledBasalRate = basalRateSchedule!.value(at: doseDate)
+            let correction = glucoseDependentCorrection(sensitivity: insulinSensitivity!, correctionRange: glucoseTargetRange!, glucose: predictedGlucose.first, at: doseDate)
 
             switch settings.automaticDosingStrategy {
             case .automaticBolus:
@@ -1908,35 +1967,66 @@ extension LoopDataManager {
                 // If a user customizes maxPartialApplicationFactor > 1; this respects maxBolus
                 let maxAutomaticBolus = min(iobHeadroom, maxBolus! * min(effectiveBolusApplicationFactor, 1.0))
 
-                dosingRecommendation = predictedGlucose.recommendedAutomaticDose(
-                    to: glucoseTargetRange!,
-                    at: predictedGlucose[0].startDate,
-                    suspendThreshold: settings.suspendThreshold?.quantity,
-                    sensitivity: correctionSensitivity,
-                    model: doseStore.insulinModelProvider.model(for: pumpInsulinType),
-                    basalRates: basalRateSchedule!,
-                    maxAutomaticBolus: maxAutomaticBolus,
-                    partialApplicationFactor: effectiveBolusApplicationFactor * self.timeBasedDoseApplicationFactor,
-                    lastTempBasal: lastTempBasal,
-                    volumeRounder: volumeRounder,
-                    rateRounder: rateRounder,
-                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
-                )
+                let recommend = { (sensitivity: InsulinSensitivitySchedule) in
+                    predictedGlucose.recommendedAutomaticDose(
+                        to: glucoseTargetRange!,
+                        at: doseDate,
+                        suspendThreshold: self.settings.suspendThreshold?.quantity,
+                        sensitivity: sensitivity,
+                        model: self.doseStore.insulinModelProvider.model(for: self.pumpInsulinType),
+                        basalRates: basalRateSchedule!,
+                        maxAutomaticBolus: maxAutomaticBolus,
+                        partialApplicationFactor: effectiveBolusApplicationFactor * self.timeBasedDoseApplicationFactor,
+                        lastTempBasal: lastTempBasal,
+                        volumeRounder: volumeRounder,
+                        rateRounder: rateRounder,
+                        isBasalRateScheduleOverrideActive: self.settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                    )
+                }
+                let standard = recommend(insulinSensitivity!)
+                if let correction = correction {
+                    dosingRecommendation = GlucoseDependentSensitivity.limitedAutomaticDose(
+                        standard: standard,
+                        scaled: recommend(correction.sensitivity),
+                        cap: correction.cap,
+                        scheduledBasalRate: scheduledBasalRate,
+                        lastTempBasal: lastTempBasal,
+                        at: doseDate,
+                        volumeRounder: volumeRounder,
+                        rateRounder: rateRounder
+                    )
+                } else {
+                    dosingRecommendation = standard
+                }
             case .tempBasalOnly:
 
-                let temp = predictedGlucose.recommendedTempBasal(
-                    to: glucoseTargetRange!,
-                    at: predictedGlucose[0].startDate,
-                    suspendThreshold: settings.suspendThreshold?.quantity,
-                    sensitivity: correctionSensitivity,
-                    model: doseStore.insulinModelProvider.model(for: pumpInsulinType),
-                    basalRates: basalRateSchedule!,
-                    maxBasalRate: maxBasal!,
-                    additionalActiveInsulinClamp: iobHeadroom,
-                    lastTempBasal: lastTempBasal,
-                    rateRounder: rateRounder,
-                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
-                )
+                let recommend = { (sensitivity: InsulinSensitivitySchedule) in
+                    predictedGlucose.recommendedTempBasal(
+                        to: glucoseTargetRange!,
+                        at: doseDate,
+                        suspendThreshold: self.settings.suspendThreshold?.quantity,
+                        sensitivity: sensitivity,
+                        model: self.doseStore.insulinModelProvider.model(for: self.pumpInsulinType),
+                        basalRates: basalRateSchedule!,
+                        maxBasalRate: maxBasal!,
+                        additionalActiveInsulinClamp: iobHeadroom,
+                        lastTempBasal: lastTempBasal,
+                        rateRounder: rateRounder,
+                        isBasalRateScheduleOverrideActive: self.settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                    )
+                }
+                var temp = recommend(insulinSensitivity!)
+                if let correction = correction {
+                    temp = GlucoseDependentSensitivity.limitedTempBasal(
+                        standard: temp,
+                        scaled: recommend(correction.sensitivity),
+                        cap: correction.cap,
+                        scheduledBasalRate: scheduledBasalRate,
+                        lastTempBasal: lastTempBasal,
+                        at: doseDate,
+                        rateRounder: rateRounder
+                    )
+                }
                 dosingRecommendation = AutomaticDoseRecommendation(basalAdjustment: temp)
             }
 
@@ -2379,6 +2469,123 @@ extension LoopDataManager {
     }
 }
 
+
+/// How soon a recommended automatic dose has to reach the pump under the pod communication interval.
+enum AutomaticDoseUrgency: Equatable {
+    case noDose
+    case canWait
+    /// Suspend, or stopping a running temp basal above scheduled basal: bypasses the interval.
+    case urgent
+
+    init(recommendation: AutomaticDoseRecommendation?, runningTempBasal: DoseEntry?, scheduledBasalRate: Double, at date: Date) {
+        guard let recommendation else {
+            self = .noDose
+            return
+        }
+        guard let basalAdjustment = recommendation.basalAdjustment else {
+            self = (recommendation.bolusUnits ?? 0) > 0 ? .canWait : .noDose
+            return
+        }
+
+        let activeTemp = runningTempBasal.flatMap { $0.type == .tempBasal && $0.startDate <= date && $0.endDate > date ? $0 : nil }
+        let runningRate = activeTemp?.unitsPerHour ?? scheduledBasalRate
+        // `.cancel` (zero duration) returns to scheduled basal rather than suspending.
+        let newRate = basalAdjustment.duration > 0 ? basalAdjustment.unitsPerHour : scheduledBasalRate
+        let stopsExtraInsulin = (activeTemp?.unitsPerHour ?? 0) > scheduledBasalRate
+
+        if newRate < runningRate, newRate == 0 || stopsExtraInsulin {
+            self = .urgent
+        } else {
+            self = .canWait
+        }
+    }
+}
+
+/// "Use for Corrections": dose changes limited to the factor's share of correcting glucose to the range midpoint.
+enum GlucoseDependentSensitivity {
+    /// Temp basal deviations are compared in units delivered over this time.
+    static let tempBasalDuration: TimeInterval = .minutes(30)
+
+    /// The active profile's factor at `glucose` (mg/dL); nil while its "Use for Corrections" is off.
+    static func activeFactor(forGlucose glucose: Double, at date: Date) -> Double? {
+        guard TherapyProfile.activeProfile()?.usesGlucoseDependentSensitivity == true,
+              let factor = TherapyOptimizer.shared.dosingSensitivityFactor(forGlucose: glucose, now: date),
+              abs(factor - 1) > 0.005 else {
+            return nil
+        }
+        return factor
+    }
+
+    static func cap(glucose: Double, correctionRangeMidpoint: Double, sensitivity: Double, factor: Double) -> Double {
+        guard sensitivity > 0, factor > 0 else { return 0 }
+        return max(0, glucose - correctionRangeMidpoint) / sensitivity * abs(1 / factor - 1)
+    }
+
+    static func scaled(_ schedule: InsulinSensitivitySchedule, by factor: Double) -> InsulinSensitivitySchedule? {
+        InsulinSensitivitySchedule(
+            unit: schedule.unit,
+            dailyItems: schedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: $0.value * factor) },
+            timeZone: schedule.timeZone
+        )
+    }
+
+    static func limitedBolus(standard: Double, scaled: Double, cap: Double, volumeRounder: ((Double) -> Double)?) -> Double {
+        let deviation = scaled - standard
+        guard abs(deviation) > cap else { return scaled }
+        let limited = standard + (deviation > 0 ? cap : -cap)
+        return volumeRounder?(limited) ?? limited
+    }
+
+    static func limitedManualBolus(standard: ManualBolusRecommendation, scaled: ManualBolusRecommendation, cap: Double, volumeRounder: ((Double) -> Double)?) -> ManualBolusRecommendation {
+        let amount = limitedBolus(standard: standard.amount, scaled: scaled.amount, cap: cap, volumeRounder: volumeRounder)
+        guard amount != scaled.amount else { return scaled }
+        return ManualBolusRecommendation(amount: amount, pendingInsulin: scaled.pendingInsulin, notice: scaled.notice)
+    }
+
+    /// Rate delivered after a recommendation: nil keeps the running temp basal, cancel returns to scheduled basal.
+    static func resultingRate(of recommendation: TempBasalRecommendation?, scheduledBasalRate: Double, lastTempBasal: DoseEntry?, at date: Date) -> Double {
+        guard let recommendation = recommendation else {
+            if let temp = lastTempBasal, temp.type == .tempBasal, temp.startDate <= date, temp.endDate > date {
+                return temp.unitsPerHour
+            }
+            return scheduledBasalRate
+        }
+        return recommendation.duration > 0 ? recommendation.unitsPerHour : scheduledBasalRate
+    }
+
+    static func limitedTempBasal(standard: TempBasalRecommendation?, scaled: TempBasalRecommendation?, cap: Double, scheduledBasalRate: Double, lastTempBasal: DoseEntry?, at date: Date, rateRounder: ((Double) -> Double)?) -> TempBasalRecommendation? {
+        let standardRate = resultingRate(of: standard, scheduledBasalRate: scheduledBasalRate, lastTempBasal: lastTempBasal, at: date)
+        let scaledRate = resultingRate(of: scaled, scheduledBasalRate: scheduledBasalRate, lastTempBasal: lastTempBasal, at: date)
+        let hours = tempBasalDuration.hours
+        let deviation = (scaledRate - standardRate) * hours
+        guard abs(deviation) > cap else { return scaled }
+        let limitedRate = standardRate + (deviation > 0 ? cap : -cap) / hours
+        let rate = rateRounder?(limitedRate) ?? limitedRate
+        guard abs(rate - standardRate) > .ulpOfOne else { return standard }
+        return TempBasalRecommendation(unitsPerHour: rate, duration: tempBasalDuration)
+    }
+
+    /// Bolus and temp basal deviations share one cap.
+    static func limitedAutomaticDose(standard: AutomaticDoseRecommendation?, scaled: AutomaticDoseRecommendation?, cap: Double, scheduledBasalRate: Double, lastTempBasal: DoseEntry?, at date: Date, volumeRounder: ((Double) -> Double)?, rateRounder: ((Double) -> Double)?) -> AutomaticDoseRecommendation? {
+        let standardBolus = standard?.bolusUnits ?? 0
+        let bolus = limitedBolus(standard: standardBolus, scaled: scaled?.bolusUnits ?? 0, cap: cap, volumeRounder: volumeRounder)
+        let remainingCap = max(0, cap - abs(bolus - standardBolus))
+        let temp = limitedTempBasal(
+            standard: standard?.basalAdjustment,
+            scaled: scaled?.basalAdjustment,
+            cap: remainingCap,
+            scheduledBasalRate: scheduledBasalRate,
+            lastTempBasal: lastTempBasal,
+            at: date,
+            rateRounder: rateRounder
+        )
+        if bolus == (scaled?.bolusUnits ?? 0), temp == scaled?.basalAdjustment {
+            return scaled
+        }
+        guard temp != nil || bolus > 0 else { return nil }
+        return AutomaticDoseRecommendation(basalAdjustment: temp, bolusUnits: bolus)
+    }
+}
 
 extension Notification.Name {
     static let LoopDataUpdated = Notification.Name(rawValue: "com.loopkit.Loop.LoopDataUpdated")

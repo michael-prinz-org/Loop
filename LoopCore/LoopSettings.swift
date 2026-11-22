@@ -75,33 +75,28 @@ public struct LoopSettings: Equatable {
 
     public var defaultRapidActingModel: ExponentialInsulinModelPreset?
 
-    /// Smallest allowed value for `customLoopInterval`.
-    public static let minimumCustomLoopInterval: TimeInterval = .minutes(5)
+    /// Smallest allowed value for `podCommunicationInterval`.
+    public static let minimumPodCommunicationInterval: TimeInterval = .minutes(5)
 
-    /// Largest allowed value for `customLoopInterval`.
-    public static let maximumCustomLoopInterval: TimeInterval = .minutes(60)
+    /// Largest allowed value for `podCommunicationInterval`.
+    public static let maximumPodCommunicationInterval: TimeInterval = .minutes(60)
 
-    /// Default value for `customLoopInterval` when the user has not chosen one yet.
-    public static let defaultCustomLoopInterval: TimeInterval = .minutes(15)
+    /// Default value for `podCommunicationInterval` when the user has not chosen one yet.
+    public static let defaultPodCommunicationInterval: TimeInterval = .minutes(15)
 
-    /// Interval above which the loop can no longer keep pump data within `inputDataRecencyInterval`
-    /// between syncs, so insulin adjustments are noticeably delayed.
-    public static let customLoopIntervalWarningThreshold: TimeInterval = .minutes(13)
-
-    public static func clampedCustomLoopInterval(_ interval: TimeInterval) -> TimeInterval {
-        min(max(interval, minimumCustomLoopInterval), maximumCustomLoopInterval)
+    public static func clampedPodCommunicationInterval(_ interval: TimeInterval) -> TimeInterval {
+        min(max(interval, minimumPodCommunicationInterval), maximumPodCommunicationInterval)
     }
 
-    /// When `true`, pump communication is throttled to `customLoopInterval`. The loop cycle itself keeps
-    /// running on every CGM reading, but automatic doses are only enacted on cycles that are allowed to
-    /// communicate with the pump.
-    public var customLoopIntervalEnabled = false
+    /// When `true`, pump communication is throttled to `podCommunicationInterval`. The loop cycle itself keeps
+    /// running on every CGM reading; only suspends and stopping a high temp basal bypass the interval.
+    public var podCommunicationIntervalEnabled = false
 
-    /// User-configured pump communication interval, applied when `customLoopIntervalEnabled` is `true`. Clamped to `minimumCustomLoopInterval...maximumCustomLoopInterval`.
-    public var customLoopInterval: TimeInterval = LoopSettings.defaultCustomLoopInterval
+    /// User-configured pump communication interval, applied when `podCommunicationIntervalEnabled` is `true`. Clamped to `minimumPodCommunicationInterval...maximumPodCommunicationInterval`.
+    public var podCommunicationInterval: TimeInterval = LoopSettings.defaultPodCommunicationInterval
 
-    /// When `true`, routine (non-dose) pod communication is suppressed while the app is in the background.
-    /// Independent of `customLoopIntervalEnabled` and of closed loop; never blocks an automatic dose.
+    /// When `true`, the routine closed-loop freshness sync is skipped while the app is in the background.
+    /// Never blocks an automatic dose.
     public var suppressPodCommunicationInBackground = false
 
     public static let defaultGlucoseUrgentLow: Double = 54
@@ -112,7 +107,7 @@ public struct LoopSettings: Equatable {
     /// Bounds accepted by the glucose display range editor, in mg/dL.
     public static let glucoseDisplayRangeBounds: ClosedRange<Double> = 40...400
 
-    /// Thresholds, in mg/dL, that colour glucose values on the watch complication. Independent of the
+    /// Thresholds, in mg/dL, that colour glucose values on the watch complication and watch chart. Independent of the
     /// therapy correction range and of Loop's own CGM status colours.
     public var glucoseDisplayRange = GlucoseDisplayRange()
 
@@ -135,9 +130,6 @@ public struct LoopSettings: Equatable {
         maximumBolus: Double? = nil,
         suspendThreshold: GlucoseThreshold? = nil,
         automaticDosingStrategy: AutomaticDosingStrategy = .tempBasalOnly,
-        customLoopIntervalEnabled: Bool = false,
-        customLoopInterval: TimeInterval = LoopSettings.defaultCustomLoopInterval,
-        suppressPodCommunicationInBackground: Bool = false,
         defaultRapidActingModel: ExponentialInsulinModelPreset? = nil
     ) {
         self.dosingEnabled = dosingEnabled
@@ -154,29 +146,11 @@ public struct LoopSettings: Equatable {
         self.maximumBolus = maximumBolus
         self.suspendThreshold = suspendThreshold
         self.automaticDosingStrategy = automaticDosingStrategy
-        self.customLoopIntervalEnabled = customLoopIntervalEnabled
-        self.customLoopInterval = customLoopInterval
-        self.suppressPodCommunicationInBackground = suppressPodCommunicationInBackground
         self.defaultRapidActingModel = defaultRapidActingModel
     }
 }
 
 extension LoopSettings {
-    /// The interval at which loop cycles are expected to complete. When a custom loop interval is
-    /// enabled this reflects the user-configured, clamped interval; otherwise it falls back to the
-    /// default loop cadence. Used to scale loop-status freshness so the indicator does not turn
-    /// yellow/red before the next cycle is due.
-    public var effectiveLoopInterval: TimeInterval {
-        LoopSettings.effectiveLoopInterval(customLoopIntervalEnabled: customLoopIntervalEnabled, customLoopInterval: customLoopInterval)
-    }
-
-    public static func effectiveLoopInterval(customLoopIntervalEnabled: Bool, customLoopInterval: TimeInterval) -> TimeInterval {
-        guard customLoopIntervalEnabled else {
-            return LoopCompletionFreshness.defaultLoopInterval
-        }
-        return clampedCustomLoopInterval(customLoopInterval)
-    }
-
     public func effectiveGlucoseTargetRangeSchedule(presumingMealEntry: Bool = false) -> GlucoseRangeSchedule?  {
         
         let preMealOverride = presumingMealEntry ? nil : self.preMealOverride
@@ -340,12 +314,12 @@ extension LoopSettings: RawRepresentable {
             self.automaticDosingStrategy = automaticDosingStrategy
         }
 
-        if let customLoopIntervalEnabled = rawValue["customLoopIntervalEnabled"] as? Bool {
-            self.customLoopIntervalEnabled = customLoopIntervalEnabled
+        if let podCommunicationIntervalEnabled = rawValue["customLoopIntervalEnabled"] as? Bool {
+            self.podCommunicationIntervalEnabled = podCommunicationIntervalEnabled
         }
 
-        if let customLoopInterval = rawValue["customLoopInterval"] as? TimeInterval {
-            self.customLoopInterval = LoopSettings.clampedCustomLoopInterval(customLoopInterval)
+        if let podCommunicationInterval = rawValue["customLoopInterval"] as? TimeInterval {
+            self.podCommunicationInterval = LoopSettings.clampedPodCommunicationInterval(podCommunicationInterval)
         }
 
         if let suppressPodCommunicationInBackground = rawValue["suppressPodCommunicationInBackground"] as? Bool {
@@ -377,8 +351,8 @@ extension LoopSettings: RawRepresentable {
         raw["maximumBolus"] = maximumBolus
         raw["minimumBGGuard"] = suspendThreshold?.rawValue
         raw["dosingStrategy"] = automaticDosingStrategy.rawValue
-        raw["customLoopIntervalEnabled"] = customLoopIntervalEnabled
-        raw["customLoopInterval"] = customLoopInterval
+        raw["customLoopIntervalEnabled"] = podCommunicationIntervalEnabled
+        raw["customLoopInterval"] = podCommunicationInterval
         raw["suppressPodCommunicationInBackground"] = suppressPodCommunicationInBackground
         raw["glucoseUrgentLow"] = glucoseDisplayRange.urgentLow
         raw["glucoseLow"] = glucoseDisplayRange.low
@@ -394,6 +368,20 @@ public enum GlucoseDisplayTier: Int {
     case inRange
     case outOfRange
     case urgent
+}
+
+extension GlucoseTrend {
+    /// Colours trend arrows on the phone and the watch alike.
+    public var displayTier: GlucoseDisplayTier {
+        switch self {
+        case .flat:
+            return .inRange
+        case .up, .down:
+            return .outOfRange
+        case .upUp, .downDown, .upUpUp, .downDownDown:
+            return .urgent
+        }
+    }
 }
 
 /// Whether delivered insulin is lowering glucose as Loop expects; computed on the phone, shown in the app and on the watch.

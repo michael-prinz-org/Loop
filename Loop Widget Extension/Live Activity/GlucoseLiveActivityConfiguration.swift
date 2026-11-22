@@ -362,7 +362,7 @@ struct GlucoseLiveActivityConfiguration: Widget {
     ) -> some View {
         Circle()
             .trim(from: context.state.isCloseLoop ? 0 : 0.2, to: 1)
-            .stroke(getLoopColor(context.state.lastCompleted, loopInterval: context.state.loopInterval), lineWidth: size/4.5)
+            .stroke(getLoopColor(context.state.lastCompleted), lineWidth: size/4.5)
             .rotationEffect(Angle(degrees: -126))
             .frame(width: size, height: size)
     }
@@ -444,11 +444,13 @@ struct GlucoseLiveActivityConfiguration: Widget {
         }
     }
 
-    private func getLoopColor(_ age: Date?, loopInterval: TimeInterval? = nil) -> Color {
-        let freshness = LoopCompletionFreshness(
-            lastCompletion: age,
-            loopInterval: loopInterval ?? LoopCompletionFreshness.defaultLoopInterval
-        )
+    private func getLoopColor(_ age: Date?) -> Color {
+        var freshness: LoopCompletionFreshness = .stale
+        if let age = age {
+            freshness = LoopCompletionFreshness(
+                age: abs(min(0, age.timeIntervalSinceNow))
+            )
+        }
 
         switch freshness {
         case .fresh:

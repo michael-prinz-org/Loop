@@ -66,7 +66,7 @@ extension FetchDataWarningDetail {
 enum LoopWarning {
     case fetchDataWarning(FetchDataWarningDetail)
     case bolusInProgress
-    case pumpDataTooOldInOpenLoop(date: Date)
+    case pumpDataTooOldInDisplayOnlyCycle(date: Date)
 }
 
 extension LoopWarning {
@@ -80,7 +80,8 @@ extension LoopWarning {
             return "fetchDataWarning"
         case .bolusInProgress:
             return "bolusInProgress"
-        case .pumpDataTooOldInOpenLoop:
+        case .pumpDataTooOldInDisplayOnlyCycle:
+            // Stored issue id, kept from the earlier name
             return "pumpDataTooOldInOpenLoop"
         }
     }
@@ -90,7 +91,7 @@ extension LoopWarning {
         switch self {
         case .fetchDataWarning(let detail):
             details = detail.issueDetails
-        case .pumpDataTooOldInOpenLoop(let date):
+        case .pumpDataTooOldInDisplayOnlyCycle(let date):
             details = ["date": ISO8601DateFormatter().string(from: date)]
         default:
             break

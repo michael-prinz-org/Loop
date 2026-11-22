@@ -115,6 +115,15 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
+    /// Remote bolus amounts are pump units; with concentrated insulin the title names it.
+    private static func remoteBolusTitle(amountDescription: String) -> String {
+        let concentration = InsulinConcentrationHistory.current
+        guard concentration != .u100 else {
+            return String(format: NSLocalizedString("Remote Bolus Entry: %@ U", comment: "The notification title for a remote bolus. (1: Bolus amount)"), amountDescription)
+        }
+        return String(format: NSLocalizedString("Remote Bolus Entry: %1$@ U (%2$@ pump units)", comment: "The notification title for a remote bolus while concentrated insulin is in use. (1: Bolus amount, 2: insulin concentration, e.g. U200)"), amountDescription, concentration.label)
+    }
+
     @MainActor
     static func sendRemoteBolusNotification(amount: Double) {
         let notification = UNMutableNotificationContent()
@@ -122,7 +131,7 @@ extension NotificationManager {
         guard let amountDescription = quantityFormatter.numberFormatter.string(from: amount) else {
             return
         }
-        notification.title =  String(format: NSLocalizedString("Remote Bolus Entry: %@ U", comment: "The notification title for a remote bolus. (1: Bolus amount)"), amountDescription)
+        notification.title = remoteBolusTitle(amountDescription: amountDescription)
         
         let body = "Success!"
 
@@ -146,7 +155,7 @@ extension NotificationManager {
             return
         }
 
-        notification.title =  String(format: NSLocalizedString("Remote Bolus Entry: %@ U", comment: "The notification title for a remote failure. (1: Bolus amount)"), amountDescription)
+        notification.title = remoteBolusTitle(amountDescription: amountDescription)
         notification.body = error.localizedDescription
         notification.sound = .default
 

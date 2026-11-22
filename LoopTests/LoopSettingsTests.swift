@@ -120,29 +120,30 @@ class LoopSettingsTests: XCTestCase {
         XCTAssertEqual(actualOverrideRange, overrideTargetRange)
     }
 
-    func testCustomLoopIntervalRawValueRoundTrip() {
+    func testPodCommunicationIntervalRawValueRoundTrip() {
         var settings = LoopSettings()
-        settings.customLoopIntervalEnabled = true
-        settings.customLoopInterval = .minutes(30)
+        settings.podCommunicationIntervalEnabled = true
+        settings.podCommunicationInterval = .minutes(30)
 
         let restored = LoopSettings(rawValue: settings.rawValue)
-        XCTAssertEqual(restored?.customLoopIntervalEnabled, true)
-        XCTAssertEqual(restored?.customLoopInterval, .minutes(30))
+        XCTAssertEqual(restored?.podCommunicationIntervalEnabled, true)
+        XCTAssertEqual(restored?.podCommunicationInterval, .minutes(30))
     }
 
-    func testCustomLoopIntervalDefaults() {
+    func testPodCommunicationIntervalDefaults() {
         let settings = LoopSettings()
-        XCTAssertFalse(settings.customLoopIntervalEnabled)
-        XCTAssertEqual(settings.customLoopInterval, LoopSettings.defaultCustomLoopInterval)
+        XCTAssertFalse(settings.podCommunicationIntervalEnabled)
+        XCTAssertEqual(settings.podCommunicationInterval, LoopSettings.defaultPodCommunicationInterval)
     }
 
-    func testCustomLoopIntervalClampedOnDecode() {
+    func testPodCommunicationIntervalClampedOnDecode() {
         var raw = LoopSettings().rawValue
+        // Stored under the earlier key name
         raw["customLoopInterval"] = TimeInterval.minutes(120)
-        XCTAssertEqual(LoopSettings(rawValue: raw)?.customLoopInterval, LoopSettings.maximumCustomLoopInterval)
+        XCTAssertEqual(LoopSettings(rawValue: raw)?.podCommunicationInterval, LoopSettings.maximumPodCommunicationInterval)
 
         raw["customLoopInterval"] = TimeInterval.minutes(1)
-        XCTAssertEqual(LoopSettings(rawValue: raw)?.customLoopInterval, LoopSettings.minimumCustomLoopInterval)
+        XCTAssertEqual(LoopSettings(rawValue: raw)?.podCommunicationInterval, LoopSettings.minimumPodCommunicationInterval)
     }
 
     func testSuppressPodCommunicationInBackgroundRawValueRoundTrip() {
@@ -215,5 +216,13 @@ class LoopSettingsTests: XCTestCase {
         XCTAssertEqual(settings.glucoseDisplayTier(forPredicted: mgdL(98), at: date), .outOfRange)
         XCTAssertEqual(settings.glucoseDisplayTier(forPredicted: mgdL(53), at: date), .urgent)
         XCTAssertEqual(settings.glucoseDisplayTier(forPredicted: mgdL(260), at: date), .urgent)
+    }
+
+    func testTrendTier() {
+        XCTAssertEqual(GlucoseTrend.flat.displayTier, .inRange)
+        XCTAssertEqual(GlucoseTrend.up.displayTier, .outOfRange)
+        XCTAssertEqual(GlucoseTrend.down.displayTier, .outOfRange)
+        XCTAssertEqual(GlucoseTrend.upUp.displayTier, .urgent)
+        XCTAssertEqual(GlucoseTrend.downDownDown.displayTier, .urgent)
     }
 }

@@ -96,7 +96,7 @@ final class ComplicationChartManager {
         }
 
         let attributedText = NSAttributedString(string: text, attributes: [
-            .font: UIFont(name: "HelveticaNeue-Bold", size: 10)!,
+            .font: UIFont(name: "HelveticaNeue-Bold", size: 10) ?? .boldSystemFont(ofSize: 10),
             .foregroundColor: data?.eventualGlucoseDisplayTier?.complicationColor ?? UIColor.chartLabel
         ])
         let size = attributedText.size()

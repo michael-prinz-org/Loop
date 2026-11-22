@@ -18,8 +18,6 @@ struct StatusWidgetTimelimeEntry: TimelineEntry {
     
     let lastLoopCompleted: Date?
     let closeLoop: Bool
-    /// Expected interval between loop cycles, used to scale loop-status freshness.
-    let loopInterval: TimeInterval
     
     let currentGlucose: GlucoseValue?
     let glucoseFetchedAt: Date?

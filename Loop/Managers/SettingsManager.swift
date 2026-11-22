@@ -113,8 +113,8 @@ class SettingsManager {
 
             // Not part of StoredSettings; see UserDefaults+Loop settings extension.
             if let defaults = UserDefaults.appGroup {
-                settings.customLoopIntervalEnabled = defaults.customLoopIntervalEnabled
-                settings.customLoopInterval = defaults.customLoopInterval
+                settings.podCommunicationIntervalEnabled = defaults.podCommunicationIntervalEnabled
+                settings.podCommunicationInterval = defaults.podCommunicationInterval
                 settings.suppressPodCommunicationInBackground = defaults.suppressPodCommunicationInBackground
                 settings.glucoseDisplayRange = defaults.glucoseDisplayRange
             }
@@ -164,8 +164,8 @@ class SettingsManager {
         // Must happen before the unchanged-settings early return below: these fields are not part of
         // StoredSettings, so a change to them alone leaves `mergedSettings` identical.
         if let newLoopSettings, let defaults = UserDefaults.appGroup {
-            defaults.customLoopIntervalEnabled = newLoopSettings.customLoopIntervalEnabled
-            defaults.customLoopInterval = newLoopSettings.customLoopInterval
+            defaults.podCommunicationIntervalEnabled = newLoopSettings.podCommunicationIntervalEnabled
+            defaults.podCommunicationInterval = newLoopSettings.podCommunicationInterval
             defaults.suppressPodCommunicationInBackground = newLoopSettings.suppressPodCommunicationInBackground
             defaults.glucoseDisplayRange = newLoopSettings.glucoseDisplayRange
         }

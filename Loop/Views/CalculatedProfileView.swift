@@ -2,7 +2,7 @@
 //  CalculatedProfileView.swift
 //  Loop
 //
-//  Read-only view of the TherapyOptimizer results.
+//  TherapyOptimizer results, applying them to profiles and the "Use for Corrections" switch.
 //
 
 import SwiftUI
@@ -27,7 +27,7 @@ struct CalculatedProfileView: View {
 
     var body: some View {
         List {
-            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides, lows or unannounced meals and compared with the active profile, which is followed automatically when it changes. All values are U100; data from times a U200 profile was active is converted automatically. The values never change dosing by themselves (except glucose-dependent sensitivity when a profile's \u{201C}Use for Corrections\u{201D} is on): tap a value to apply it to the active profile.", comment: "Footer explaining the calculated therapy profile"))) {
+            Section(footer: Text(NSLocalizedString("Calculated from periods without carbs, overrides (and 4 hours after), lows or unannounced meals and compared with the active profile, which is followed automatically when it changes. All values are U100; data from times a U200 profile was active is converted automatically. The values change dosing only through \u{201C}Use for Corrections\u{201D} or when you tap a value with at least 3 days of data to apply it to the active profile.", comment: "Footer explaining the calculated therapy profile"))) {
                 Toggle(NSLocalizedString("Calculate Profile", comment: "Toggle that enables the therapy optimizer"), isOn: Binding(
                     get: { optimizer.state != nil },
                     set: { enabled in
@@ -151,7 +151,7 @@ struct CalculatedValuesSections: View {
     /// The calculated factor per glucose range, shown on this profile's sensitivity.
     private func sensitivityByGlucoseSection(profileSensitivity: Double) -> some View {
         let format = state.sensitivityUnit == .milligramsPerDeciliter ? "%.0f" : "%.1f"
-        let bounds = TherapyOptimizerEngine.glucoseRangeUpperBounds.map { String(format: format, state.displaySensitivity($0)) }
+        let bounds = TherapyOptimizerEngine.glucoseRangeUpperBounds.map { String(format: format, locale: .current, state.displaySensitivity($0)) }
         let ranges = state.sensitivityByGlucose ?? []
         let limits = TherapyOptimizerEngine.dosingSensitivityFactorRange
         return Section(
@@ -160,7 +160,7 @@ struct CalculatedValuesSections: View {
                 Text(NSLocalizedString("Glucose · Change · Sensitivity · Days", comment: "Column legend of the insulin sensitivity by glucose range table"))
                     .font(.caption2)
             },
-            footer: Text(NSLocalizedString("Change observed in each glucose range relative to your overall insulin sensitivity, e.g. −15 % means insulin works 15 % less there; it updates with the calculation. Sensitivity shows this profile's all-day value with the change. With “Use for Corrections” on and this profile active, corrections and bolus recommendations use the profile's insulin sensitivity at that time with the change (limited to ±20 %, only ranges with at least 3 days of data, never below 70 mg/dL). The profile's values and forecasts are not changed; switch off any time.", comment: "Footer of the insulin sensitivity by glucose range table"))
+            footer: Text(NSLocalizedString("Change observed in each glucose range relative to your overall insulin sensitivity, e.g. −15 % means insulin works 15 % less there; it updates with the calculation. Sensitivity shows this profile's all-day value with the change. With \u{201C}Use for Corrections\u{201D} on and this profile active, bolus and automatic dose recommendations use the change at the current glucose (blended between ranges, limited to ±20 %, needs at least 3 days of data and a calculation from the last 3 days). It changes a recommendation by at most its part of correcting current glucose to the middle of the correction range: carbs are dosed as usual, at or below the middle nothing changes, and maximum bolus and maximum basal rate still apply. Forecasts and the profile's values are not changed.", comment: "Footer of the insulin sensitivity by glucose range table"))
         ) {
             Toggle(NSLocalizedString("Use for Corrections", comment: "Switch that applies the glucose-dependent insulin sensitivity to correction dosing"), isOn: Binding(
                 get: { profile.usesGlucoseDependentSensitivity == true },
@@ -171,7 +171,7 @@ struct CalculatedValuesSections: View {
                 }
             ))
             glucoseRangeRow(NSLocalizedString("Profile", comment: "Row with the profile's all-day insulin sensitivity the glucose ranges are applied to"), change: nil, sensitivity: profileSensitivity, dataDays: state.sensitivityByGlucoseReference?.dataDays ?? 0, format: format)
-            ForEach(0..<TherapyOptimizerEngine.glucoseRangeCount, id: \.self) { index in
+            ForEach(1..<TherapyOptimizerEngine.glucoseRangeCount, id: \.self) { index in
                 let range = index < ranges.count ? ranges[index] : nil
                 glucoseRangeRow(
                     glucoseRangeLabel(index, bounds: bounds),
@@ -185,9 +185,6 @@ struct CalculatedValuesSections: View {
     }
 
     private func glucoseRangeLabel(_ range: Int, bounds: [String]) -> String {
-        if range == 0 {
-            return "< \(bounds[0])"
-        }
         if range == bounds.count {
             return "> \(bounds[bounds.count - 1])"
         }
@@ -202,7 +199,7 @@ struct CalculatedValuesSections: View {
             Text(change.map { String(format: "%+.0f %%", ($0 - 1) * 100) } ?? "")
                 .bold()
                 .frame(minWidth: 56, alignment: .trailing)
-            Text(sensitivity.map { String(format: format, state.displaySensitivity($0)) } ?? "–")
+            Text(sensitivity.map { String(format: format, locale: .current, state.displaySensitivity($0)) } ?? "–")
                 .foregroundColor(.secondary)
                 .frame(minWidth: 48, alignment: .trailing)
             Text("\(dataDays)")
@@ -217,7 +214,7 @@ struct CalculatedValuesSections: View {
         Section(header: header(NSLocalizedString("Basal Rates (U/hr)", comment: "Header of the calculated basal rates table"))) {
             ForEach(0..<24, id: \.self) { hour in
                 valuesRow(hourLabel(hour), start: reference[hour], calculated: state.basal.calculated[hour], dataDays: state.basal.dataDays[hour], format: "%.2f") {
-                    offerApply(.basal, hour: hour, calculated: state.basal.calculated[hour])
+                    offerApply(.basal, hour: hour, calculated: state.basal.calculated[hour], dataDays: state.basal.dataDays[hour])
                 }
             }
             valuesRow(NSLocalizedString("Total U/day", comment: "Row label for the total daily basal insulin"), start: reference.reduce(0, +), calculated: state.basal.calculated.reduce(0, +), dataDays: nil, format: "%.2f")
@@ -225,16 +222,16 @@ struct CalculatedValuesSections: View {
     }
 
     private func sensitivitySection(_ reference: [Double]) -> some View {
-        let unit = state.sensitivityUnit == .milligramsPerDeciliter ? "mg/dL" : "mmol/L"
+        let unit = state.sensitivityUnit.localizedShortUnitString
         let format = state.sensitivityUnit == .milligramsPerDeciliter ? "%.0f" : "%.1f"
         let referenceAllDay = Self.mean(reference)
         return Section(header: header(String(format: NSLocalizedString("Insulin Sensitivities (%@/U)", comment: "Header of the calculated insulin sensitivities table (1: glucose unit)"), unit))) {
             valuesRow(allDayLabel, start: state.displaySensitivity(referenceAllDay), calculated: state.displaySensitivity(state.sensitivity.calculatedAllDay), dataDays: state.sensitivity.dataDaysAllDay, format: format) {
-                offerScale(.sensitivity, calculatedAllDay: state.sensitivity.calculatedAllDay, referenceAllDay: referenceAllDay)
+                offerScale(.sensitivity, calculatedAllDay: state.sensitivity.calculatedAllDay, referenceAllDay: referenceAllDay, dataDays: state.sensitivity.dataDaysAllDay)
             }
             ForEach(0..<24, id: \.self) { hour in
                 valuesRow(hourLabel(hour), start: state.displaySensitivity(reference[hour]), calculated: state.displaySensitivity(state.sensitivity.calculated[hour]), dataDays: state.sensitivity.dataDays[hour], format: format) {
-                    offerApply(.sensitivity, hour: hour, calculated: state.sensitivity.calculated[hour])
+                    offerApply(.sensitivity, hour: hour, calculated: state.sensitivity.calculated[hour], dataDays: state.sensitivity.dataDays[hour])
                 }
             }
         }
@@ -244,11 +241,11 @@ struct CalculatedValuesSections: View {
         let referenceAllDay = Self.mean(reference)
         return Section(header: header(NSLocalizedString("Carb Ratios (g/U)", comment: "Header of the calculated carb ratios table"))) {
             valuesRow(allDayLabel, start: referenceAllDay, calculated: state.carbRatio.calculatedAllDay, dataDays: state.carbRatio.dataDaysAllDay, format: "%.1f") {
-                offerScale(.carbRatio, calculatedAllDay: state.carbRatio.calculatedAllDay, referenceAllDay: referenceAllDay)
+                offerScale(.carbRatio, calculatedAllDay: state.carbRatio.calculatedAllDay, referenceAllDay: referenceAllDay, dataDays: state.carbRatio.dataDaysAllDay)
             }
             ForEach(0..<24, id: \.self) { hour in
                 valuesRow(hourLabel(hour), start: reference[hour], calculated: state.carbRatio.calculated[hour], dataDays: state.carbRatio.dataDays[hour], format: "%.1f") {
-                    offerApply(.carbRatio, hour: hour, calculated: state.carbRatio.calculated[hour])
+                    offerApply(.carbRatio, hour: hour, calculated: state.carbRatio.calculated[hour], dataDays: state.carbRatio.dataDays[hour])
                 }
             }
         }
@@ -280,9 +277,9 @@ struct CalculatedValuesSections: View {
             Text(title)
                 .frame(width: 64, alignment: .leading)
             Spacer()
-            Text(String(format: format, start))
+            Text(String(format: format, locale: .current, start))
                 .foregroundColor(.secondary)
-            Text(String(format: format, calculated))
+            Text(String(format: format, locale: .current, calculated))
                 .bold()
                 .frame(minWidth: 48, alignment: .trailing)
             Text(String(format: "%+.0f%%", change))
@@ -299,7 +296,8 @@ struct CalculatedValuesSections: View {
     }
 
     /// Asks before writing the calculated value, converted to the profile's units and concentration.
-    private func offerApply(_ kind: TherapyProfilesModel.ScheduleKind, hour: Int, calculated: Double) {
+    private func offerApply(_ kind: TherapyProfilesModel.ScheduleKind, hour: Int, calculated: Double, dataDays: Int) {
+        guard hasEnoughData(dataDays) else { return }
         let factor = profile.concentration.unitsPerPumpUnit
         let concentration = profile.isConcentrated ? " \(profile.concentration.label)" : ""
         let value: Double
@@ -307,19 +305,18 @@ struct CalculatedValuesSections: View {
         let valueText: String
         switch kind {
         case .basal:
-            value = (calculated / factor * 20).rounded() / 20
+            value = TherapyOptimizerMath.roundedToGrid(calculated / factor, stepsPerUnit: TherapyOptimizerMath.basalStepsPerUnit)
             items = profile.basalRateSchedule.items
-            valueText = String(format: "%.2f U/hr", value) + concentration
+            valueText = String(format: "%.2f U/hr", locale: .current, value) + concentration
         case .sensitivity:
             let unit = profile.insulinSensitivitySchedule.unit
-            let stepsPerUnit = unit == .milligramsPerDeciliter ? 1.0 : 10.0
-            value = (HKQuantity(unit: .milligramsPerDeciliter, doubleValue: calculated).doubleValue(for: unit) * factor * stepsPerUnit).rounded() / stepsPerUnit
+            value = TherapyOptimizerMath.roundedToGrid(HKQuantity(unit: .milligramsPerDeciliter, doubleValue: calculated).doubleValue(for: unit) * factor, stepsPerUnit: TherapyOptimizerMath.sensitivityStepsPerUnit(unit))
             items = profile.insulinSensitivitySchedule.items
-            valueText = String(format: unit == .milligramsPerDeciliter ? "%.0f %@/U" : "%.1f %@/U", value, unit == .milligramsPerDeciliter ? "mg/dL" : "mmol/L") + concentration
+            valueText = String(format: unit == .milligramsPerDeciliter ? "%.0f %@/U" : "%.1f %@/U", locale: .current, value, unit.localizedShortUnitString) + concentration
         case .carbRatio:
-            value = (calculated * factor * 10).rounded() / 10
+            value = TherapyOptimizerMath.roundedToGrid(calculated * factor, stepsPerUnit: TherapyOptimizerMath.carbRatioStepsPerUnit)
             items = profile.carbRatioSchedule.items
-            valueText = String(format: "%.1f g/U", value) + concentration
+            valueText = String(format: "%.1f g/U", locale: .current, value) + concentration
         }
         guard abs(TherapyOptimizerMath.hourlyValues(items)[hour] - value) >= 1e-9 else {
             message = String(format: NSLocalizedString("“%@” already uses %@.", comment: "Message when the calculated value already is in the profile (1: profile name, 2: value)"), profile.name, valueText)
@@ -334,8 +331,8 @@ struct CalculatedValuesSections: View {
     }
 
     /// The all-day change applied to every entry, so an hourly profile keeps its shape.
-    private func offerScale(_ kind: TherapyProfilesModel.ScheduleKind, calculatedAllDay: Double, referenceAllDay: Double) {
-        guard referenceAllDay > 0 else { return }
+    private func offerScale(_ kind: TherapyProfilesModel.ScheduleKind, calculatedAllDay: Double, referenceAllDay: Double, dataDays: Int) {
+        guard referenceAllDay > 0, hasEnoughData(dataDays) else { return }
         let factor = calculatedAllDay / referenceAllDay
         let percent = (factor - 1) * 100
         guard abs(percent) >= 0.5 else {
@@ -344,6 +341,13 @@ struct CalculatedValuesSections: View {
         }
         let summary = String(format: NSLocalizedString("All entries of “%@” %+.0f %%; the hourly pattern is kept.", comment: "Summary of an all-day change to apply (1: profile name, 2: percent)"), profile.name, percent)
         pendingChange = CalculatedProfileChange(profileID: profile.id, kind: kind, change: .scale(factor), summary: summary)
+    }
+
+    private func hasEnoughData(_ dataDays: Int) -> Bool {
+        let required = TherapyOptimizerEngine.reliableHourDataDays
+        guard dataDays < required else { return true }
+        message = String(format: NSLocalizedString("This value is based on %1$d days of data; at least %2$d are needed to apply it.", comment: "Message when a calculated value has too little data to be applied (1: days of data, 2: required days)"), dataDays, required)
+        return false
     }
 }
 
@@ -395,19 +399,22 @@ private struct CreateCalculatedProfileSheet: View {
                 Section(header: Text(NSLocalizedString("Name", comment: "Header of the therapy profile name field"))) {
                     TextField(NSLocalizedString("Name", comment: "Placeholder of the therapy profile name field"), text: $name)
                 }
-                Section(footer: Text(NSLocalizedString("Parts that are not taken are copied from the active profile.", comment: "Footer of the create-from-calculated sheet"))) {
-                    Toggle(NSLocalizedString("Basal Rates", comment: "Therapy profile basal rates row"), isOn: $includeBasal)
-                    Toggle(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"), isOn: $includeSensitivity)
-                    if includeSensitivity {
+                Section(footer: Text(NSLocalizedString("Parts that are not taken are copied from the active profile. Parts and hours with fewer than 3 days of data keep the profile's values.", comment: "Footer of the create-from-calculated sheet"))) {
+                    includeToggle(NSLocalizedString("Basal Rates", comment: "Therapy profile basal rates row"), isOn: $includeBasal, hasData: hasEnoughData(state.basal))
+                    includeToggle(NSLocalizedString("Insulin Sensitivities", comment: "Therapy profile insulin sensitivities row"), isOn: $includeSensitivity, hasData: hasEnoughData(state.sensitivity))
+                    if includeSensitivity && hasEnoughData(state.sensitivity) {
                         modePicker(selection: $hourlySensitivity)
                     }
-                    Toggle(NSLocalizedString("Carb Ratios", comment: "Therapy profile carb ratios row"), isOn: $includeCarbRatio)
-                    if includeCarbRatio {
+                    includeToggle(NSLocalizedString("Carb Ratios", comment: "Therapy profile carb ratios row"), isOn: $includeCarbRatio, hasData: hasEnoughData(state.carbRatio))
+                    if includeCarbRatio && hasEnoughData(state.carbRatio) {
                         modePicker(selection: $hourlyCarbRatio)
                     }
                 }
                 Section(footer: Text(NSLocalizedString("Calculated values are U100. With U200 on, basal rates and limits are halved and carb ratios and insulin sensitivities doubled.", comment: "Footer of the U200 switch when creating a profile from calculated values"))) {
                     Toggle(NSLocalizedString("U200 Insulin", comment: "Switch that creates the therapy profile for U200 insulin"), isOn: $isU200)
+                }
+                if isU200, let draft = draft {
+                    BasalConversionPreview(source: draft, target: .u200)
                 }
                 if let errorMessage = errorMessage {
                     Section {
@@ -439,30 +446,50 @@ private struct CreateCalculatedProfileSheet: View {
         .pickerStyle(.segmented)
     }
 
-    private func create() {
-        // Calculated values are U100; parts not taken come from the active profile, converted to U100 if needed.
+    private func includeToggle(_ title: String, isOn: Binding<Bool>, hasData: Bool) -> some View {
+        Toggle(title, isOn: Binding(get: { isOn.wrappedValue && hasData }, set: { isOn.wrappedValue = $0 }))
+            .disabled(!hasData)
+    }
+
+    private func hasEnoughData(_ values: TherapyOptimizerValues) -> Bool {
+        let required = TherapyOptimizerEngine.reliableHourDataDays
+        return values.dataDaysAllDay >= required || values.dataDays.contains { $0 >= required }
+    }
+
+    /// The new profile in U100: calculated parts plus the active profile's other parts, converted to U100 if needed.
+    private var draft: TherapyProfile? {
         let base = profiles.activeProfileInU100
         let live = profiles.liveViewModel.therapySettings
         let maximumBasalRate = base?.maximumBasalRatePerHour ?? live.maximumBasalRatePerHour
-        let basal = includeBasal
+        let basal = includeBasal && hasEnoughData(state.basal)
             ? state.calculatedBasalSchedule(maximumBasalRate: maximumBasalRate, maximumEntryCount: profiles.liveViewModel.maximumBasalScheduleEntryCount)
             : base?.basalRateSchedule
-        let sensitivity = includeSensitivity ? state.calculatedSensitivitySchedule(hourly: hourlySensitivity) : base?.insulinSensitivitySchedule
-        let carbRatio = includeCarbRatio ? state.calculatedCarbRatioSchedule(hourly: hourlyCarbRatio) : base?.carbRatioSchedule
+        let sensitivity = includeSensitivity && hasEnoughData(state.sensitivity) ? state.calculatedSensitivitySchedule(hourly: hourlySensitivity) : base?.insulinSensitivitySchedule
+        let carbRatio = includeCarbRatio && hasEnoughData(state.carbRatio) ? state.calculatedCarbRatioSchedule(hourly: hourlyCarbRatio) : base?.carbRatioSchedule
 
-        guard let basal = basal, let sensitivity = sensitivity, let carbRatio = carbRatio,
-              let profile = TherapyProfile(
-                name: name.trimmingCharacters(in: .whitespaces),
-                basalRateSchedule: basal,
-                carbRatioSchedule: carbRatio,
-                insulinSensitivitySchedule: sensitivity,
-                maximumBasalRatePerHour: maximumBasalRate,
-                maximumBolus: base?.maximumBolus ?? live.maximumBolus
-              ).copy(named: name.trimmingCharacters(in: .whitespaces), concentration: isU200 ? .u200 : .u100) else {
+        guard let basal = basal, let sensitivity = sensitivity, let carbRatio = carbRatio else {
+            return nil
+        }
+        return TherapyProfile(
+            name: name.trimmingCharacters(in: .whitespaces),
+            basalRateSchedule: basal,
+            carbRatioSchedule: carbRatio,
+            insulinSensitivitySchedule: sensitivity,
+            maximumBasalRatePerHour: maximumBasalRate,
+            maximumBolus: base?.maximumBolus ?? live.maximumBolus
+        )
+    }
+
+    private func create() {
+        guard let draft = draft else {
             errorMessage = NSLocalizedString("The profile could not be created.", comment: "Error when a profile cannot be created from calculated values")
             return
         }
-        profiles.add(profile)
-        presentationMode.wrappedValue.dismiss()
+        do {
+            profiles.add(try draft.copy(named: draft.name, concentration: isU200 ? .u200 : .u100))
+            presentationMode.wrappedValue.dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

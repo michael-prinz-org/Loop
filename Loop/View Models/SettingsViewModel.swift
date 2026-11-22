@@ -52,8 +52,8 @@ public typealias PumpManagerViewModel = DeviceViewModel<PumpManagerDescriptor>
 public protocol SettingsViewModelDelegate: AnyObject {
     func dosingEnabledChanged(_: Bool)
     func dosingStrategyChanged(_: AutomaticDosingStrategy)
-    func customLoopIntervalEnabledChanged(_: Bool)
-    func customLoopIntervalChanged(_: TimeInterval)
+    func podCommunicationIntervalEnabledChanged(_: Bool)
+    func podCommunicationIntervalChanged(_: TimeInterval)
     func suppressPodCommunicationInBackgroundChanged(_: Bool)
     func glucoseDisplayRangeChanged(_: GlucoseDisplayRange)
     var closedLoopDescriptiveText: String? { get }
@@ -97,15 +97,15 @@ public class SettingsViewModel: ObservableObject {
        }
     }
 
-    @Published var customLoopIntervalEnabled: Bool {
+    @Published var podCommunicationIntervalEnabled: Bool {
         didSet {
-            delegate?.customLoopIntervalEnabledChanged(customLoopIntervalEnabled)
+            delegate?.podCommunicationIntervalEnabledChanged(podCommunicationIntervalEnabled)
         }
     }
 
-    @Published var customLoopIntervalMinutes: Double {
+    @Published var podCommunicationIntervalMinutes: Double {
         didSet {
-            delegate?.customLoopIntervalChanged(TimeInterval(minutes: customLoopIntervalMinutes))
+            delegate?.podCommunicationIntervalChanged(TimeInterval(minutes: podCommunicationIntervalMinutes))
         }
     }
 
@@ -115,16 +115,11 @@ public class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// Smallest selectable custom loop interval, in minutes.
-    let minimumCustomLoopIntervalMinutes: Double = LoopSettings.minimumCustomLoopInterval.minutes
+    /// Smallest selectable pod communication interval, in minutes.
+    let minimumPodCommunicationIntervalMinutes: Double = LoopSettings.minimumPodCommunicationInterval.minutes
 
-    /// Largest selectable custom loop interval, in minutes.
-    let maximumCustomLoopIntervalMinutes: Double = LoopSettings.maximumCustomLoopInterval.minutes
-
-    /// Above this the loop can no longer keep pump data fresh between syncs while closed loop is on.
-    var customLoopIntervalExceedsRecencyLimit: Bool {
-        customLoopIntervalEnabled && TimeInterval(minutes: customLoopIntervalMinutes) > LoopSettings.customLoopIntervalWarningThreshold
-    }
+    /// Largest selectable pod communication interval, in minutes.
+    let maximumPodCommunicationIntervalMinutes: Double = LoopSettings.maximumPodCommunicationInterval.minutes
 
     /// Glucose thresholds in mg/dL, ordered urgent low < low < high < urgent high.
     @Published var glucoseDisplayRange: GlucoseDisplayRange {
@@ -150,8 +145,8 @@ public class SettingsViewModel: ObservableObject {
                 initialDosingEnabled: Bool,
                 isClosedLoopAllowed: Published<Bool>.Publisher,
                 automaticDosingStrategy: AutomaticDosingStrategy,
-                initialCustomLoopIntervalEnabled: Bool,
-                initialCustomLoopIntervalMinutes: Double,
+                initialPodCommunicationIntervalEnabled: Bool,
+                initialPodCommunicationIntervalMinutes: Double,
                 initialSuppressPodCommunicationInBackground: Bool,
                 initialGlucoseDisplayRange: GlucoseDisplayRange,
                 availableSupports: [SupportUI],
@@ -170,8 +165,8 @@ public class SettingsViewModel: ObservableObject {
         self.closedLoopPreference = initialDosingEnabled
         self.isClosedLoopAllowed = false
         self.automaticDosingStrategy = automaticDosingStrategy
-        self.customLoopIntervalEnabled = initialCustomLoopIntervalEnabled
-        self.customLoopIntervalMinutes = initialCustomLoopIntervalMinutes
+        self.podCommunicationIntervalEnabled = initialPodCommunicationIntervalEnabled
+        self.podCommunicationIntervalMinutes = initialPodCommunicationIntervalMinutes
         self.suppressPodCommunicationInBackground = initialSuppressPodCommunicationInBackground
         self.glucoseDisplayRange = initialGlucoseDisplayRange
         self.availableSupports = availableSupports
@@ -221,8 +216,8 @@ extension SettingsViewModel {
                                  initialDosingEnabled: true,
                                  isClosedLoopAllowed: FakeClosedLoopAllowedPublisher().$mockIsClosedLoopAllowed,
                                  automaticDosingStrategy: .automaticBolus,
-                                 initialCustomLoopIntervalEnabled: false,
-                                 initialCustomLoopIntervalMinutes: LoopSettings.defaultCustomLoopInterval.minutes,
+                                 initialPodCommunicationIntervalEnabled: false,
+                                 initialPodCommunicationIntervalMinutes: LoopSettings.defaultPodCommunicationInterval.minutes,
                                  initialSuppressPodCommunicationInBackground: false,
                                  initialGlucoseDisplayRange: GlucoseDisplayRange(),
                                  availableSupports: [],

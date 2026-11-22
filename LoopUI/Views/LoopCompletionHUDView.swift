@@ -44,17 +44,6 @@ public final class LoopCompletionHUDView: BaseHUDView {
         }
     }
 
-    /// The expected interval between loop cycles. Used to scale the freshness thresholds so the
-    /// indicator does not turn yellow/red before the next cycle is due when a custom loop interval
-    /// is configured. Defaults to Loop's standard cadence.
-    public var loopInterval: TimeInterval = LoopCompletionFreshness.defaultLoopInterval {
-        didSet {
-            if loopInterval != oldValue {
-                updateDisplay(nil)
-            }
-        }
-    }
-
     public var loopInProgress = false {
         didSet {
             loopStateView.animated = loopInProgress
@@ -164,7 +153,7 @@ public final class LoopCompletionHUDView: BaseHUDView {
         if let date = lastLoopCompleted {
             let ago = abs(min(0, date.timeIntervalSinceNow))
 
-            freshness = LoopCompletionFreshness(age: ago, loopInterval: loopInterval)
+            freshness = LoopCompletionFreshness(age: ago)
 
             if let timeString = timeAgoFormatter.string(from: ago) {
                 switch traitCollection.preferredContentSizeCategory {

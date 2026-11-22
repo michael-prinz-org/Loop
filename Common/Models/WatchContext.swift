@@ -35,7 +35,7 @@ final class WatchContext: RawRepresentable {
         return predictedGlucose?.values.last?.quantity
     }
 
-    /// Precomputed on the phone so the watch never evaluates thresholds or the correction range itself.
+    /// Precomputed on the phone for the complication text; the eventual tier needs the correction range.
     var glucoseDisplayTier: GlucoseDisplayTier?
     var eventualGlucoseDisplayTier: GlucoseDisplayTier?
     /// Only set while the insulin effect monitor warns.
@@ -44,7 +44,6 @@ final class WatchContext: RawRepresentable {
     var insulinConcentrationLabel: String?
 
     var loopLastRunDate: Date?
-    var loopInterval: TimeInterval?
     var podWakeUpCount: Int?
     var lastPodWakeUpDate: Date?
     var lastNetTempBasalDose: Double?
@@ -100,7 +99,6 @@ final class WatchContext: RawRepresentable {
         batteryPercentage = rawValue["bp"] as? Double
 
         loopLastRunDate = rawValue["ld"] as? Date
-        loopInterval = rawValue["li"] as? TimeInterval
         podWakeUpCount = rawValue["pwc"] as? Int
         lastPodWakeUpDate = rawValue["pwd"] as? Date
         lastNetTempBasalDose = rawValue["ba"] as? Double
@@ -165,7 +163,6 @@ final class WatchContext: RawRepresentable {
         raw["icl"] = insulinConcentrationLabel
         raw["iob"] = iob
         raw["ld"] = loopLastRunDate
-        raw["li"] = loopInterval
         raw["pwc"] = podWakeUpCount
         raw["pwd"] = lastPodWakeUpDate
         raw["r"] = reservoir

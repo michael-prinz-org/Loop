@@ -47,23 +47,4 @@ class LoopCompletionFreshnessTests: XCTestCase {
         loopCompletionFreshness = .stale
         XCTAssertNil(loopCompletionFreshness.maxAge)
     }
-
-    func testMaxAgeScalesWithLoopInterval() {
-        let interval = TimeInterval(minutes: 15)
-
-        XCTAssertEqual(LoopCompletionFreshness.fresh.maxAge(for: interval), TimeInterval.minutes(16))
-        XCTAssertEqual(LoopCompletionFreshness.aging.maxAge(for: interval), TimeInterval.minutes(46))
-        XCTAssertNil(LoopCompletionFreshness.stale.maxAge(for: interval))
-    }
-
-    func testInitializationWithCustomLoopInterval() {
-        let interval = TimeInterval(minutes: 15)
-
-        // With a 15 min interval, ages that would be "aging"/"stale" at the default cadence stay fresh.
-        XCTAssertEqual(LoopCompletionFreshness(age: .minutes(15), loopInterval: interval), .fresh)
-        XCTAssertEqual(LoopCompletionFreshness(age: .minutes(16), loopInterval: interval), .fresh)
-        XCTAssertEqual(LoopCompletionFreshness(age: .minutes(30), loopInterval: interval), .aging)
-        XCTAssertEqual(LoopCompletionFreshness(age: .minutes(46), loopInterval: interval), .aging)
-        XCTAssertEqual(LoopCompletionFreshness(age: .minutes(47), loopInterval: interval), .stale)
-    }
 }

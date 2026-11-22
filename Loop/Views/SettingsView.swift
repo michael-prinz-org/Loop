@@ -195,38 +195,31 @@ extension SettingsView {
             }
             .disabled(!viewModel.isOnboardingComplete || !viewModel.isClosedLoopAllowed)
 
-            customLoopIntervalControls
+            podCommunicationIntervalControls
         }
     }
 
     @ViewBuilder
-    private var customLoopIntervalControls: some View {
+    private var podCommunicationIntervalControls: some View {
         describedToggle(
-            isOn: $viewModel.customLoopIntervalEnabled,
-            title: Text("Custom pod communication interval", comment: "The title text for the custom loop interval switch cell"),
-            description: NSLocalizedString("Rate limit: caps how often Loop is allowed to contact the pod (dose syncs and background freshness syncs alike) to at most once per the interval below, in both foreground and background. It does not decide whether a sync happens, only how often — see Skip Background Pod Syncs below to also skip syncs that aren't needed for a dose. Off keeps the standard loop cadence.", comment: "The description text for the custom loop interval switch cell")
+            isOn: $viewModel.podCommunicationIntervalEnabled,
+            title: Text("Custom pod communication interval", comment: "The title text for the pod communication interval switch cell"),
+            description: NSLocalizedString("Limits how often Loop contacts the pod to once per the interval below, in foreground and background. Increases, automatic boluses and moderate reductions wait until the interval has passed; a suspend and stopping a temp basal above scheduled basal are sent right away. Automatic Bolus applies its partial dose once per interval, so it responds more slowly. Off keeps the standard loop cadence.", comment: "The description text for the pod communication interval switch cell")
         )
 
-        VStack(alignment: .leading, spacing: 4) {
-            ExpandableWheelPicker(
-                title: Text("Pod communication interval", comment: "The label for the pod communication interval picker"),
-                selection: $viewModel.customLoopIntervalMinutes,
-                options: (Int(viewModel.minimumCustomLoopIntervalMinutes)...Int(viewModel.maximumCustomLoopIntervalMinutes)).map { Double($0) },
-                label: { String(format: NSLocalizedString("%d min", comment: "Custom loop interval value in minutes (1: number of minutes)"), Int($0.rounded())) }
-            )
-
-            if viewModel.customLoopIntervalExceedsRecencyLimit {
-                DescriptiveText(label: NSLocalizedString("Above 13 minutes the pod is contacted less often than pump data stays fresh, so a status refresh is performed right before a dose and insulin adjustments can lag up to the communication interval.", comment: "Warning shown when the pod communication interval exceeds the pump data recency limit"))
-                    .foregroundColor(guidanceColors.warning)
-            }
-        }
+        ExpandableWheelPicker(
+            title: Text("Pod communication interval", comment: "The label for the pod communication interval picker"),
+            selection: $viewModel.podCommunicationIntervalMinutes,
+            options: (Int(viewModel.minimumPodCommunicationIntervalMinutes)...Int(viewModel.maximumPodCommunicationIntervalMinutes)).map { Double($0) },
+            label: { String(format: NSLocalizedString("%d min", comment: "Pod communication interval value in minutes (1: number of minutes)"), Int($0.rounded())) }
+        )
         .padding(.vertical, 3)
-        .disabled(!viewModel.customLoopIntervalEnabled)
+        .disabled(!viewModel.podCommunicationIntervalEnabled)
 
         describedToggle(
             isOn: $viewModel.suppressPodCommunicationInBackground,
             title: Text("Skip Background Pod Syncs", comment: "The title text for the disable pod communication switch cell"),
-            description: NSLocalizedString("Need filter: while the app is in the background, skips the routine sync Loop otherwise makes just to keep pod data fresh, so the pod is only contacted when a dose actually needs to be delivered. A required dose is never skipped. The app in the foreground is unaffected — freshness syncs continue there so status shown on screen stays current. With Closed Loop off there are no freshness syncs to skip, so this setting has no effect.", comment: "The description text for the disable pod communication switch cell")
+            description: NSLocalizedString("While the app is in the background, skips the routine sync Loop otherwise makes just to keep pod data fresh. Dose changes are never skipped: a suspend or stopping extra insulin is sent right away, other dose changes after the interval. In the foreground freshness syncs continue so the status on screen stays current. With Closed Loop off there are no freshness syncs to skip, so this setting has no effect.", comment: "The description text for the disable pod communication switch cell")
         )
     }
 
@@ -297,7 +290,10 @@ extension SettingsView {
     }
 
     private var therapySettingsView: some View {
-        TherapySettingsScreen(glucoseDisplayRange: $viewModel.glucoseDisplayRange, makeBridge: {
+        TherapySettingsScreen(glucoseDisplayRange: $viewModel.glucoseDisplayRange, podStatus: { [weak deviceManager = viewModel.therapySettingsViewModelDelegate as? DeviceDataManager] in
+            guard let deviceManager = deviceManager else { return .unknown }
+            return PodStatus(rawPumpManager: deviceManager.pumpManager?.rawValue)
+        }, makeBridge: {
             StandardTherapySettingsBridge(
                 liveViewModel: TherapySettingsViewModel(
                     therapySettings: viewModel.therapySettings(),
@@ -735,7 +731,7 @@ struct GlucoseRangeCard: View {
         return VStack(alignment: .leading, spacing: 10) {
             Text(NSLocalizedString("Glucose Range", comment: "Title text for the glucose range editor"))
                 .font(.headline)
-            DescriptiveText(label: NSLocalizedString("These thresholds define the general glucose limits used by Loop to classify glucose values.", comment: "Descriptive text for general glucose range"))
+            DescriptiveText(label: NSLocalizedString("These thresholds colour glucose values on the Apple Watch complication and chart. They do not change dosing.", comment: "Descriptive text for general glucose range"))
             Divider()
             row(NSLocalizedString("Urgent Low", comment: "Glucose display range threshold label"), keyPath: \.urgentLow, from: bounds.lowerBound, through: range.low - step)
             Divider()
@@ -952,17 +948,27 @@ struct LogView: View {
 
     private var levelMenu: some View {
         Menu {
-            levelButton(NSLocalizedString("All levels", comment: "Log level filter option"), level: .debug)
-            levelButton(NSLocalizedString("Info & up", comment: "Log level filter option"), level: .info)
-            levelButton(NSLocalizedString("Default & up", comment: "Log level filter option"), level: .notice)
-            levelButton(NSLocalizedString("Errors only", comment: "Log level filter option"), level: .error)
+            levelButton(level: .debug)
+            levelButton(level: .info)
+            levelButton(level: .notice)
+            levelButton(level: .error)
         } label: {
-            menuLabel(systemImage: "line.3.horizontal.decrease.circle", text: minimumLevel == .debug ? NSLocalizedString("All levels", comment: "Log level filter option") : minimumLevel.title)
+            menuLabel(systemImage: "line.3.horizontal.decrease.circle", text: levelFilterTitle(minimumLevel))
         }
     }
 
-    private func levelButton(_ title: String, level: InAppLogLevel) -> some View {
-        Button {
+    private func levelFilterTitle(_ level: InAppLogLevel) -> String {
+        switch level {
+        case .debug: return NSLocalizedString("All levels", comment: "Log level filter option")
+        case .info: return NSLocalizedString("Info & up", comment: "Log level filter option")
+        case .notice: return NSLocalizedString("Default & up", comment: "Log level filter option")
+        case .error, .fault: return NSLocalizedString("Errors only", comment: "Log level filter option")
+        }
+    }
+
+    private func levelButton(level: InAppLogLevel) -> some View {
+        let title = levelFilterTitle(level)
+        return Button {
             minimumLevel = level
         } label: {
             if minimumLevel == level {
@@ -1089,9 +1095,11 @@ private struct TherapySettingsScreen: View {
     @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
     @StateObject private var bridge: StandardTherapySettingsBridge
     @Binding var glucoseDisplayRange: GlucoseDisplayRange
+    let podStatus: () -> PodStatus
 
-    init(glucoseDisplayRange: Binding<GlucoseDisplayRange>, makeBridge: @escaping () -> StandardTherapySettingsBridge) {
+    init(glucoseDisplayRange: Binding<GlucoseDisplayRange>, podStatus: @escaping () -> PodStatus, makeBridge: @escaping () -> StandardTherapySettingsBridge) {
         _glucoseDisplayRange = glucoseDisplayRange
+        self.podStatus = podStatus
         _bridge = StateObject(wrappedValue: makeBridge())
     }
 
@@ -1107,7 +1115,7 @@ private struct TherapySettingsScreen: View {
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink(destination: TherapyProfilesView(liveViewModel: bridge.liveViewModel)
+                NavigationLink(destination: TherapyProfilesView(liveViewModel: bridge.liveViewModel, podStatus: podStatus)
                                 .environmentObject(displayGlucosePreference)) {
                     Text(NSLocalizedString("Profiles", comment: "Button in Therapy Settings that opens the therapy profiles list"))
                 }
@@ -1232,6 +1240,11 @@ final class StandardTherapySettingsBridge: ObservableObject, TherapySettingsView
 enum TherapyProfileError: LocalizedError {
     case basalRateAboveMaximum(Double)
     case invalidSchedule
+    case concentrationChangeNeedsConfirmation
+    /// Start of the day's segment, in seconds after midnight
+    case convertedBasalRateIsZero(startTime: TimeInterval)
+    case convertedCarbRatioOutsideGuardrail
+    case convertedInsulinSensitivityOutsideGuardrail
 
     var errorDescription: String? {
         switch self {
@@ -1239,7 +1252,21 @@ enum TherapyProfileError: LocalizedError {
             return String(format: NSLocalizedString("This profile contains a basal rate above your maximum basal rate of %.2f U/hr. Edit the profile or raise the maximum basal rate first.", comment: "Error when activating a therapy profile whose basal rates exceed the maximum basal rate (1: maximum basal rate)"), maximum)
         case .invalidSchedule:
             return NSLocalizedString("The schedule is invalid.", comment: "Error when a therapy profile schedule cannot be created")
+        case .concentrationChangeNeedsConfirmation:
+            return NSLocalizedString("This profile uses another insulin concentration. Activate it from the profile screen and confirm the change.", comment: "Error when a therapy profile with another insulin concentration is activated without confirmation")
+        case .convertedBasalRateIsZero(let startTime):
+            return String(format: NSLocalizedString("The basal rate from %@ would become 0 U/hr in the other concentration. Raise it first; the profile was not converted.", comment: "Error when converting a therapy profile would round a basal rate down to zero (1: segment start time)"), Self.scheduleTimeString(startTime))
+        case .convertedCarbRatioOutsideGuardrail:
+            return NSLocalizedString("A converted carb ratio would be outside the allowed range. The profile was not converted.", comment: "Error when converting a therapy profile would put a carb ratio outside the guardrails")
+        case .convertedInsulinSensitivityOutsideGuardrail:
+            return NSLocalizedString("A converted insulin sensitivity would be outside the allowed range. The profile was not converted.", comment: "Error when converting a therapy profile would put an insulin sensitivity outside the guardrails")
         }
+    }
+
+    /// "HH:mm" for a schedule start time in seconds after midnight.
+    static func scheduleTimeString(_ startTime: TimeInterval) -> String {
+        let minutes = Int(startTime / 60)
+        return String(format: "%02d:%02d", minutes / 60, minutes % 60)
     }
 }
 
@@ -1305,44 +1332,57 @@ extension TherapyProfile {
         maximumBolus = settings.maximumBolus ?? maximumBolus
     }
 
-    /// Same insulin effect with another concentration: basal and limits scale with 1/factor (rounded to 0.05),
-    /// carb ratios and insulin sensitivities with the factor (e.g. U100 → U200: halve / double).
-    func converted(toConcentration target: InsulinConcentration, name: String) -> TherapyProfile? {
+    /// Same insulin effect in another concentration; basal and limits round down so no rate grows in IU.
+    func converted(toConcentration target: InsulinConcentration, name: String) throws -> TherapyProfile {
         let factor = target.unitsPerPumpUnit / concentration.unitsPerPumpUnit
-        let pumpUnits: (Double) -> Double = { ($0 / factor * 20).rounded() / 20 }
-        let limit: (Double) -> Double = { ($0 / factor * 20 + 1e-9).rounded(.down) / 20 }
-        // Keep values on the editors' picker grids (0.1 g/U; 1 mg/dL or 0.1 mmol/L).
-        let carbRatio: (Double) -> Double = { ($0 * factor * 10).rounded() / 10 }
-        let sensitivityStepsPerUnit = insulinSensitivitySchedule.unit == .milligramsPerDeciliter ? 1.0 : 10.0
-        let sensitivity: (Double) -> Double = { ($0 * factor * sensitivityStepsPerUnit).rounded() / sensitivityStepsPerUnit }
-        guard let basalRates = BasalRateSchedule(
-                dailyItems: basalRateSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: pumpUnits($0.value)) },
-                timeZone: basalRateSchedule.timeZone),
-              let carbRatios = CarbRatioSchedule(
-                unit: carbRatioSchedule.unit,
-                dailyItems: carbRatioSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: carbRatio($0.value)) },
-                timeZone: carbRatioSchedule.timeZone),
-              let sensitivities = InsulinSensitivitySchedule(
-                unit: insulinSensitivitySchedule.unit,
-                dailyItems: insulinSensitivitySchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: sensitivity($0.value)) },
-                timeZone: insulinSensitivitySchedule.timeZone) else {
-            return nil
+        let pumpUnits: (Double) -> Double = { TherapyOptimizerMath.roundedToGrid($0 / factor, stepsPerUnit: TherapyOptimizerMath.basalStepsPerUnit, rule: .down) }
+        let carbRatio: (Double) -> Double = { TherapyOptimizerMath.roundedToGrid($0 * factor, stepsPerUnit: TherapyOptimizerMath.carbRatioStepsPerUnit) }
+        let sensitivityStepsPerUnit = TherapyOptimizerMath.sensitivityStepsPerUnit(insulinSensitivitySchedule.unit)
+        let sensitivity: (Double) -> Double = { TherapyOptimizerMath.roundedToGrid($0 * factor, stepsPerUnit: sensitivityStepsPerUnit) }
+
+        let basalItems = basalRateSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: pumpUnits($0.value)) }
+        if let zeroed = zip(basalRateSchedule.items, basalItems).first(where: { $0.0.value > 0 && $0.1.value <= 0 }) {
+            throw TherapyProfileError.convertedBasalRateIsZero(startTime: zeroed.0.startTime)
+        }
+        let carbRatioItems = carbRatioSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: carbRatio($0.value)) }
+        let carbRatioUnit = carbRatioSchedule.unit.unitDivided(by: .internationalUnit())
+        guard carbRatioItems.allSatisfy({ Guardrail.carbRatio.absoluteBounds.contains(HKQuantity(unit: carbRatioUnit, doubleValue: $0.value)) }) else {
+            throw TherapyProfileError.convertedCarbRatioOutsideGuardrail
+        }
+        let sensitivityItems = insulinSensitivitySchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: sensitivity($0.value)) }
+        let sensitivityUnit = insulinSensitivitySchedule.unit.unitDivided(by: .internationalUnit())
+        guard sensitivityItems.allSatisfy({ Guardrail.insulinSensitivity.absoluteBounds.contains(HKQuantity(unit: sensitivityUnit, doubleValue: $0.value)) }) else {
+            throw TherapyProfileError.convertedInsulinSensitivityOutsideGuardrail
+        }
+        guard let basalRates = BasalRateSchedule(dailyItems: basalItems, timeZone: basalRateSchedule.timeZone),
+              let carbRatios = CarbRatioSchedule(unit: carbRatioSchedule.unit, dailyItems: carbRatioItems, timeZone: carbRatioSchedule.timeZone),
+              let sensitivities = InsulinSensitivitySchedule(unit: insulinSensitivitySchedule.unit, dailyItems: sensitivityItems, timeZone: insulinSensitivitySchedule.timeZone) else {
+            throw TherapyProfileError.invalidSchedule
         }
         return TherapyProfile(
             name: name,
             basalRateSchedule: basalRates,
             carbRatioSchedule: carbRatios,
             insulinSensitivitySchedule: sensitivities,
-            maximumBasalRatePerHour: maximumBasalRatePerHour.map(limit),
-            maximumBolus: maximumBolus.map(limit),
+            maximumBasalRatePerHour: maximumBasalRatePerHour.map(pumpUnits),
+            maximumBolus: maximumBolus.map(pumpUnits),
             insulinConcentration: target == .u100 ? nil : target
         )
     }
 
+    /// Basal rates in international units per hour, comparable across concentrations.
+    var basalRatesInInternationalUnits: [RepeatingScheduleValue<Double>] {
+        basalRateSchedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: $0.value * concentration.unitsPerPumpUnit) }
+    }
+
+    var dailyBasalInInternationalUnits: Double {
+        basalRateSchedule.total() * concentration.unitsPerPumpUnit
+    }
+
     /// A new, unsaved profile with these values for the given insulin, converted if the concentration differs.
-    func copy(named name: String, concentration target: InsulinConcentration) -> TherapyProfile? {
+    func copy(named name: String, concentration target: InsulinConcentration) throws -> TherapyProfile {
         guard target == concentration else {
-            return converted(toConcentration: target, name: name)
+            return try converted(toConcentration: target, name: name)
         }
         return TherapyProfile(
             name: name,
@@ -1385,6 +1425,13 @@ extension TherapyProfile {
 
     /// The single active profile; Standard when nothing else has been activated.
     static func activeProfile() -> TherapyProfile? {
+        activeProfileSnapshot.mutate { snapshot in
+            guard snapshot == nil else { return }
+            snapshot = .some(loadActiveProfile())
+        } ?? nil
+    }
+
+    private static func loadActiveProfile() -> TherapyProfile? {
         let profiles = UserDefaults.standard.therapyProfiles
         if let id = UserDefaults.standard.activeTherapyProfileID, let active = profiles.first(where: { $0.id == id }) {
             return active
@@ -1410,10 +1457,12 @@ extension TherapyProfile {
 final class TherapyProfilesModel: ObservableObject {
     @Published private(set) var profiles: [TherapyProfile]
     let liveViewModel: TherapySettingsViewModel
+    private let podStatus: () -> PodStatus
     private var liveSettingsCancellable: AnyCancellable?
 
-    init(liveViewModel: TherapySettingsViewModel) {
+    init(liveViewModel: TherapySettingsViewModel, podStatus: @escaping () -> PodStatus) {
         self.liveViewModel = liveViewModel
+        self.podStatus = podStatus
         TherapyProfile.ensureStandard(from: liveViewModel.therapySettings)
         self.profiles = UserDefaults.standard.therapyProfiles
         // The active marker depends on the live therapy settings.
@@ -1428,6 +1477,21 @@ final class TherapyProfilesModel: ObservableObject {
 
     func isActive(_ profile: TherapyProfile) -> Bool {
         TherapyProfile.activeProfile()?.id == profile.id
+    }
+
+    func concentrationSwitchConfirmation(for profile: TherapyProfile) -> ConcentrationSwitchConfirmation {
+        ConcentrationSwitchConfirmation.required(
+            from: TherapyProfile.activeProfile()?.concentration ?? .u100,
+            to: profile.concentration,
+            podActive: podStatus().isActive
+        )
+    }
+
+    /// Start of the running pod, offered as the date the new concentration applies from.
+    var podStartForConcentrationSwitch: Date? {
+        let status = podStatus()
+        guard status.isActive == true, let start = status.activatedAt, start < Date() else { return nil }
+        return start
     }
 
     var standardProfile: TherapyProfile? {
@@ -1449,7 +1513,8 @@ final class TherapyProfilesModel: ObservableObject {
     /// The active profile in U100 values, used as the base for profiles created from calculated (U100) values.
     var activeProfileInU100: TherapyProfile? {
         guard let active = TherapyProfile.activeProfile() else { return nil }
-        return active.isConcentrated ? active.converted(toConcentration: .u100, name: active.name) : active
+        guard active.isConcentrated else { return active }
+        return try? active.converted(toConcentration: .u100, name: active.name)
     }
 
     func save(_ profile: TherapyProfile) {
@@ -1464,7 +1529,14 @@ final class TherapyProfilesModel: ObservableObject {
     }
 
     /// Transfers the whole profile: delivery limits and basal rates to the pump, then all values into Loop's settings.
-    func activate(_ profile: TherapyProfile, completion: @escaping (Error?) -> Void) {
+    /// `concentrationStart` backdates a concentration change (e.g. to pod start); nil means now.
+    func activate(_ profile: TherapyProfile, concentrationChangeConfirmed: Bool, concentrationStart: Date? = nil, completion: @escaping (Error?) -> Void) {
+        let currentConcentration = TherapyProfile.activeProfile()?.concentration ?? .u100
+        guard concentrationChangeConfirmed || profile.concentration == currentConcentration else {
+            completion(TherapyProfileError.concentrationChangeNeedsConfirmation)
+            return
+        }
+        let switchStart = profile.concentration == currentConcentration ? nil : concentrationStart
         let live = liveViewModel.therapySettings
         if let maximum = profile.maximumBasalRatePerHour ?? live.maximumBasalRatePerHour,
            profile.basalRateSchedule.items.contains(where: { $0.value > maximum + 1e-9 }) {
@@ -1485,13 +1557,13 @@ final class TherapyProfilesModel: ObservableObject {
                 case .failure(let error):
                     completion(error)
                 case .success(let syncedLimits):
-                    self.syncBasalRatesAndApply(profile, syncedLimits: syncedLimits, previousLimits: previousLimits, completion: completion)
+                    self.syncBasalRatesAndApply(profile, concentrationStart: switchStart, syncedLimits: syncedLimits, previousLimits: previousLimits, completion: completion)
                 }
             }
         }
     }
 
-    private func syncBasalRatesAndApply(_ profile: TherapyProfile, syncedLimits: DeliveryLimits, previousLimits: DeliveryLimits, completion: @escaping (Error?) -> Void) {
+    private func syncBasalRatesAndApply(_ profile: TherapyProfile, concentrationStart: Date?, syncedLimits: DeliveryLimits, previousLimits: DeliveryLimits, completion: @escaping (Error?) -> Void) {
         liveViewModel.syncBasalRateSchedule(items: profile.basalRateSchedule.items) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -1502,7 +1574,7 @@ final class TherapyProfilesModel: ObservableObject {
                     self.save(activated)
                     UserDefaults.standard.activeTherapyProfileID = activated.id
                     // Before `apply`, so the effect caches it invalidates are rebuilt with rescaled dose history.
-                    InsulinConcentrationHistory.record(activated.concentration, previous: previousConcentration)
+                    InsulinConcentrationHistory.record(activated.concentration, previous: previousConcentration, at: min(concentrationStart ?? Date(), Date()))
                     self.apply(activated)
                     completion(nil)
                 case .failure(let error):
@@ -1556,19 +1628,18 @@ final class TherapyProfilesModel: ObservableObject {
             completion(TherapyProfileError.invalidSchedule)
             return
         }
-        // Keep values on the editors' grids (0.05 U/h, 1 mg/dL or 0.1 mmol/L, 0.1 g/U).
         let stepsPerUnit: Double
         switch kind {
-        case .basal: stepsPerUnit = 20
-        case .sensitivity: stepsPerUnit = profile.insulinSensitivitySchedule.unit == .milligramsPerDeciliter ? 1 : 10
-        case .carbRatio: stepsPerUnit = 10
+        case .basal: stepsPerUnit = TherapyOptimizerMath.basalStepsPerUnit
+        case .sensitivity: stepsPerUnit = TherapyOptimizerMath.sensitivityStepsPerUnit(profile.insulinSensitivitySchedule.unit)
+        case .carbRatio: stepsPerUnit = TherapyOptimizerMath.carbRatioStepsPerUnit
         }
         let changed = { (items: [RepeatingScheduleValue<Double>]) -> [RepeatingScheduleValue<Double>] in
             switch change {
             case .value(let value, let hour):
                 return TherapyOptimizerMath.settingValue(value, forHour: hour, in: items)
             case .scale(let factor):
-                return items.map { RepeatingScheduleValue(startTime: $0.startTime, value: ($0.value * factor * stepsPerUnit).rounded() / stepsPerUnit) }
+                return items.map { RepeatingScheduleValue(startTime: $0.startTime, value: TherapyOptimizerMath.roundedToGrid($0.value * factor, stepsPerUnit: stepsPerUnit)) }
             }
         }
         switch kind {
@@ -1596,7 +1667,7 @@ final class TherapyProfilesModel: ObservableObject {
         }
         let profileIsActive = isActive(profile)
         if profileIsActive, kind == .basal {
-            activate(profile, completion: completion)
+            activate(profile, concentrationChangeConfirmed: false, completion: completion)
             return
         }
         save(profile)
@@ -1677,13 +1748,13 @@ struct TherapyProfilesView: View {
     @State private var newProfileSource: TherapyProfile?
     @State private var createdProfileID: UUID?
 
-    init(liveViewModel: TherapySettingsViewModel) {
-        _model = StateObject(wrappedValue: TherapyProfilesModel(liveViewModel: liveViewModel))
+    init(liveViewModel: TherapySettingsViewModel, podStatus: @escaping () -> PodStatus) {
+        _model = StateObject(wrappedValue: TherapyProfilesModel(liveViewModel: liveViewModel, podStatus: podStatus))
     }
 
     var body: some View {
         List {
-            Section(footer: Text(NSLocalizedString("A profile is a set of basal rates, carb ratios and insulin sensitivities. Activating a profile sends its basal rates to the pump and makes it your current therapy settings.", comment: "Footer of the therapy profiles list"))) {
+            Section(footer: Text(NSLocalizedString("A profile is a set of basal rates, carb ratios, insulin sensitivities and delivery limits for one insulin concentration (U100 or U200); its values are pump units of that insulin. Activating a profile sends its basal rates and limits to the pump and makes it your current therapy settings.", comment: "Footer of the therapy profiles list"))) {
                 ForEach(model.profiles) { profile in
                     NavigationLink(destination: TherapyProfileDetailView(profileID: profile.id, profiles: model),
                                    tag: profile.id,
@@ -1695,17 +1766,10 @@ struct TherapyProfilesView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
-                            if profile.isConcentrated {
-                                Text(profile.concentration.label)
-                                    .font(.caption.bold())
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.orange))
-                            }
+                            InsulinConcentrationBadge(concentration: profile.concentration)
                             Spacer()
                             if model.isActive(profile) {
-                                Text(NSLocalizedString("Active", comment: "Marker for the therapy profile matching the current therapy settings"))
+                                Text(NSLocalizedString("Active", comment: "Marker for the active therapy profile"))
                                     .foregroundColor(.secondary)
                             }
                         }
@@ -1748,13 +1812,23 @@ struct NewTherapyProfileSheet: View {
 
     @Environment(\.presentationMode) private var presentationMode
     @State private var name: String
-    @State private var isU200 = false
+    @State private var isU200: Bool
     @State private var errorMessage: String?
 
     init(source: TherapyProfile, defaultName: String, onCreate: @escaping (TherapyProfile) -> Void) {
         self.source = source
         self.onCreate = onCreate
         _name = State(initialValue: defaultName)
+        _isU200 = State(initialValue: Self.startsAsU200(source: source))
+    }
+
+    /// The switch starts at the source's concentration, so a copy is only converted when the user asks for it.
+    static func startsAsU200(source: TherapyProfile) -> Bool {
+        source.concentration == .u200
+    }
+
+    private var targetConcentration: InsulinConcentration {
+        isU200 ? .u200 : .u100
     }
 
     var body: some View {
@@ -1766,22 +1840,25 @@ struct NewTherapyProfileSheet: View {
                 Section(footer: Text(NSLocalizedString("U200 halves basal rates, maximum basal rate and maximum bolus and doubles carb ratios and insulin sensitivities, so the same insulin effect results with insulin of double concentration. All amounts in Loop are then pump units.", comment: "Footer of the U200 switch when creating a therapy profile"))) {
                     Toggle(NSLocalizedString("U200 Insulin", comment: "Switch that creates the therapy profile for U200 insulin"), isOn: $isU200)
                 }
+                if targetConcentration != source.concentration {
+                    BasalConversionPreview(source: source, target: targetConcentration)
+                }
                 if let errorMessage = errorMessage {
                     Section {
                         Text(errorMessage).foregroundColor(.red)
                     }
                 }
             }
-            .navigationTitle(Text(NSLocalizedString("New Profile", comment: "Title of the create-from-calculated sheet")))
+            .navigationTitle(Text(NSLocalizedString("New Profile", comment: "Title of the sheet that creates a therapy profile")))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(NSLocalizedString("Cancel", comment: "Cancel creating a profile from calculated values")) {
+                    Button(NSLocalizedString("Cancel", comment: "Cancel creating a therapy profile")) {
                         presentationMode.wrappedValue.dismiss()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(NSLocalizedString("Create", comment: "Create a profile from calculated values"), action: create)
+                    Button(NSLocalizedString("Create", comment: "Create the therapy profile"), action: create)
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -1789,12 +1866,55 @@ struct NewTherapyProfileSheet: View {
     }
 
     private func create() {
-        guard let profile = source.copy(named: name.trimmingCharacters(in: .whitespaces), concentration: isU200 ? .u200 : .u100) else {
-            errorMessage = NSLocalizedString("The profile could not be created.", comment: "Error when a profile cannot be created from calculated values")
-            return
+        do {
+            onCreate(try source.copy(named: name.trimmingCharacters(in: .whitespaces), concentration: targetConcentration))
+            presentationMode.wrappedValue.dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        onCreate(profile)
-        presentationMode.wrappedValue.dismiss()
+    }
+}
+
+/// Old and new basal rates in IU/hr and the daily total, shown before a converted profile is saved.
+struct BasalConversionPreview: View {
+    let source: TherapyProfile
+    let target: InsulinConcentration
+
+    private static let formatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 3
+        return formatter
+    }()
+
+    private func number(_ value: Double) -> String {
+        Self.formatter.string(from: NSNumber(value: value)) ?? ""
+    }
+
+    var body: some View {
+        switch Result(catching: { try source.converted(toConcentration: target, name: source.name) }) {
+        case .success(let converted):
+            Section(header: Text(String(format: NSLocalizedString("Basal Rates %1$@ → %2$@ in IU/hr", comment: "Header of the basal conversion preview (1: source concentration, 2: target concentration)"), source.concentration.label, target.label)),
+                    footer: Text(NSLocalizedString("Converted rates are rounded down to the pump's 0.05 U/hr steps, so no rate increases.", comment: "Footer of the basal conversion preview"))) {
+                ForEach(Array(zip(source.basalRatesInInternationalUnits, converted.basalRatesInInternationalUnits).enumerated()), id: \.offset) { item in
+                    HStack {
+                        Text(TherapyProfileError.scheduleTimeString(item.element.0.startTime))
+                        Spacer()
+                        Text("\(number(item.element.0.value)) → \(number(item.element.1.value))")
+                    }
+                }
+                HStack {
+                    Text(NSLocalizedString("Daily Total (IU)", comment: "Daily basal total row of the basal conversion preview"))
+                    Spacer()
+                    Text("\(number(source.dailyBasalInInternationalUnits)) → \(number(converted.dailyBasalInInternationalUnits))")
+                }
+            }
+        case .failure(let error):
+            Section {
+                Text(error.localizedDescription).foregroundColor(.red)
+            }
+        }
     }
 }
 
@@ -1811,6 +1931,8 @@ struct TherapyProfileDetailView: View {
     @State private var name: String
     @State private var activeEditor: Editor?
     @State private var activationTarget: TherapyProfile?
+    @State private var activationConfirmation = ConcentrationSwitchConfirmation.notNeeded
+    @State private var activationPodStart: Date?
     @State private var isActivating = false
     @State private var activationErrorMessage: String?
     @State private var copySource: TherapyProfile?
@@ -1877,7 +1999,7 @@ struct TherapyProfileDetailView: View {
             }
 
             if let profile = profile {
-                Section(footer: Text(NSLocalizedString("When a profile with another concentration is activated, insulin delivered before is converted to the new pump units, so active insulin stays correct.", comment: "Footer of the insulin concentration of a therapy profile"))) {
+                Section(footer: Text(String(format: NSLocalizedString("Basal rates, limits, carb ratios and insulin sensitivities of this profile are in %@ pump units. When a profile with another concentration is activated, insulin delivered before the chosen start (now or pod start) is converted to the new pump units, so active insulin stays correct. Apple Health receives international units (IU); Nightscout receives pump units.", comment: "Footer of the insulin concentration of a therapy profile (1: insulin concentration, e.g. U200)"), profile.concentration.label))) {
                     HStack {
                         Text(NSLocalizedString("Insulin", comment: "Label of the insulin concentration of a therapy profile"))
                         Spacer()
@@ -1892,7 +2014,7 @@ struct TherapyProfileDetailView: View {
 
             Section(footer: Text(NSLocalizedString("Only one profile is active at a time. Changes to the active profile are applied immediately; basal rate changes are sent to the pump. Deactivating a profile returns to Standard.", comment: "Footer of the therapy profile activation section"))) {
                 if let profile = profile, profiles.isActive(profile) {
-                    Label(NSLocalizedString("Active Profile", comment: "Shown when the therapy profile matches the current therapy settings"), systemImage: "checkmark.circle.fill")
+                    Label(NSLocalizedString("Active Profile", comment: "Shown when the therapy profile is the active one"), systemImage: "checkmark.circle.fill")
                     if !profile.isStandardProfile, let standard = profiles.standardProfile {
                         activationButton(
                             title: NSLocalizedString("Deactivate (Back to Standard)", comment: "Button that deactivates a therapy profile and activates Standard"),
@@ -1912,11 +2034,6 @@ struct TherapyProfileDetailView: View {
             if let state = optimizer.state, let profile = profile {
                 Section(footer: Text(NSLocalizedString("Compares this profile with the calculated values, converted to this profile's insulin. Tap a value to apply it to this profile.", comment: "Footer of the switch that shows the calculated profile in a therapy profile"))) {
                     Toggle(NSLocalizedString("Show Calculated Profile", comment: "Switch that shows the calculated values in a therapy profile"), isOn: showCalculatedProfileBinding)
-                    if !showCalculatedProfile, profile.usesGlucoseDependentSensitivity == true {
-                        Label(NSLocalizedString("Glucose-dependent sensitivity is used for corrections", comment: "Shown while a profile's glucose-dependent insulin sensitivity is on but the calculated tables are hidden"), systemImage: "waveform.path.ecg")
-                            .font(.footnote)
-                            .foregroundColor(.orange)
-                    }
                 }
                 if showCalculatedProfile {
                     CalculatedValuesSections(state: state, profile: profile, profiles: profiles, pendingChange: $pendingCalculatedChange, message: $calculatedMessage)
@@ -1956,6 +2073,8 @@ struct TherapyProfileDetailView: View {
 
     private func activationButton(title: String, confirmationTitle: String, target: TherapyProfile) -> some View {
         Button {
+            activationConfirmation = profiles.concentrationSwitchConfirmation(for: target)
+            activationPodStart = activationConfirmation == .strict ? profiles.podStartForConcentrationSwitch : nil
             activationTarget = target
         } label: {
             HStack {
@@ -1971,18 +2090,69 @@ struct TherapyProfileDetailView: View {
             get: { activationTarget?.id == target.id },
             set: { if !$0 { activationTarget = nil } }
         )) {
-            Button(NSLocalizedString("Activate", comment: "Confirm therapy profile activation")) {
-                activate(target)
+            if activationConfirmation == .strict, let podStart = activationPodStart {
+                Button(NSLocalizedString("Activate – Insulin Since Now", comment: "Confirm a concentration switch that applies from now on"), role: .destructive) {
+                    activate(target)
+                }
+                Button(NSLocalizedString("Activate – Insulin Since Pod Start", comment: "Confirm a concentration switch that applies since the running pod was started"), role: .destructive) {
+                    activate(target, concentrationStart: podStart)
+                }
+            } else if activationConfirmation == .strict {
+                Button(NSLocalizedString("Activate", comment: "Confirm therapy profile activation"), role: .destructive) {
+                    activate(target)
+                }
+            } else {
+                Button(NSLocalizedString("Activate", comment: "Confirm therapy profile activation")) {
+                    activate(target)
+                }
             }
             Button(NSLocalizedString("Cancel", comment: "Cancel therapy profile activation"), role: .cancel) {}
         } message: {
-            Text(String(format: NSLocalizedString("The basal rates of “%@” are sent to the pump now. Carb ratios and insulin sensitivities take effect immediately.", comment: "Message of the therapy profile activation confirmation (1: profile name)"), target.name))
+            Text(activationMessage(for: target))
         }
     }
 
-    private func activate(_ target: TherapyProfile) {
+    private func activationMessage(for target: TherapyProfile) -> String {
+        var paragraphs = [String(format: NSLocalizedString("The basal rates of “%1$@” (%2$@ pump units) are sent to the pump now. Carb ratios and insulin sensitivities take effect immediately.", comment: "Message of the therapy profile activation confirmation (1: profile name, 2: insulin concentration, e.g. U200)"), target.name, target.concentration.label)]
+        guard activationConfirmation != .notNeeded else {
+            return paragraphs[0]
+        }
+        let live = profiles.liveViewModel.therapySettings
+        let currentConcentration = TherapyProfile.activeProfile()?.concentration ?? .u100
+        let newConcentration = target.concentration
+        paragraphs.append([
+            String(format: NSLocalizedString("Insulin: %1$@ → %2$@", comment: "Concentration change in the therapy profile activation confirmation (1: current, 2: new)"), currentConcentration.label, newConcentration.label),
+            String(format: NSLocalizedString("Daily basal: %1$@ → %2$@", comment: "Daily basal change in the therapy profile activation confirmation (1: current, 2: new)"),
+                   internationalUnits(live.basalRateSchedule.map { $0.total() * currentConcentration.unitsPerPumpUnit }),
+                   internationalUnits(target.basalRateSchedule.total() * newConcentration.unitsPerPumpUnit)),
+            String(format: NSLocalizedString("Maximum bolus: %1$@ → %2$@", comment: "Maximum bolus change in the therapy profile activation confirmation (1: current, 2: new)"),
+                   internationalUnits(live.maximumBolus.map { $0 * currentConcentration.unitsPerPumpUnit }),
+                   internationalUnits((target.maximumBolus ?? live.maximumBolus).map { $0 * newConcentration.unitsPerPumpUnit }))
+        ].joined(separator: "\n"))
+        paragraphs.append(String(format: NSLocalizedString("The profile must match the insulin in the pod now (%@).", comment: "Reminder in the therapy profile activation confirmation (1: new concentration)"), newConcentration.label))
+        if activationConfirmation == .strict {
+            paragraphs.append(NSLocalizedString("The running pod doses with this profile immediately. If the pod holds other insulin, every dose is doubled or halved.", comment: "Warning in the therapy profile activation confirmation while a pod is running"))
+        }
+        if let podStart = activationPodStart {
+            paragraphs.append(String(format: NSLocalizedString("Since when does the pod hold %1$@ insulin? “Since Pod Start” (%2$@) also counts the insulin this pod delivered so far as %1$@, so active insulin is correct if the pod was filled with it.", comment: "Question in the therapy profile activation confirmation while a pod is running (1: new concentration, 2: pod start date and time)"), newConcentration.label, DateFormatter.localizedString(from: podStart, dateStyle: .short, timeStyle: .short)))
+        }
+        return paragraphs.joined(separator: "\n\n")
+    }
+
+    private static let internationalUnitsFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    private func internationalUnits(_ value: Double?) -> String {
+        value.flatMap { Self.internationalUnitsFormatter.string(from: $0, unit: NSLocalizedString("IU", comment: "Unit of international insulin units")) } ?? "–"
+    }
+
+    private func activate(_ target: TherapyProfile, concentrationStart: Date? = nil) {
         isActivating = true
-        profiles.activate(target) { error in
+        profiles.activate(target, concentrationChangeConfirmed: activationConfirmation != .notNeeded, concentrationStart: concentrationStart) { error in
             editor.reload()
             isActivating = false
             activationErrorMessage = error?.localizedDescription

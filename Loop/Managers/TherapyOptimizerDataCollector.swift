@@ -36,7 +36,6 @@ final class TherapyOptimizer: ObservableObject {
     private static let lookback: TimeInterval = 8 * 3600
     /// Raw history Loop keeps locally is 7 days; start a little later so insulin effects are complete.
     private static let backfillDays = 6
-    private static let dailyUpdateHour = 6
 
     private init() {
         queue.async {
@@ -85,9 +84,7 @@ final class TherapyOptimizer: ObservableObject {
             if state.lastProcessedDate < backfillStart {
                 state.lastProcessedDate = backfillStart
                 state.mealCutoffDate = backfillStart
-                state.hypoHoldUntil = nil
-                state.unexplainedRiseSince = nil
-                state.recentCounteraction = nil
+                state.resetIntervalContext()
             }
             try? FileManager.default.removeItem(at: Self.disabledStateURL)
             self.workingState = state
@@ -118,9 +115,7 @@ final class TherapyOptimizer: ObservableObject {
             state.summaries.removeAll { $0.day >= backfillStart }
             state.lastProcessedDate = backfillStart
             state.mealCutoffDate = backfillStart
-            state.hypoHoldUntil = nil
-            state.unexplainedRiseSince = nil
-            state.recentCounteraction = nil
+            state.resetIntervalContext()
             self.workingState = state
             self.runProcessing(now: Date(), replay: true)
         }
@@ -130,7 +125,7 @@ final class TherapyOptimizer: ObservableObject {
         queue.async {
             guard var state = self.workingState, TherapyOptimizerState.windowOptions.contains(days) else { return }
             state.windowDays = days
-            TherapyOptimizerEngine.replay(&state, rawDays: self.loadRawDays(calendar: state.calendar), through: Date())
+            TherapyOptimizerEngine.replay(&state, rawDays: self.loadRawDays(calendar: state.calendar), through: state.lastProcessedDate)
             self.workingState = state
             self.saveState()
             self.publish()
@@ -184,6 +179,9 @@ final class TherapyOptimizer: ObservableObject {
             state.hypoHoldUntil = previous.hypoHoldUntil
             state.unexplainedRiseSince = previous.unexplainedRiseSince
             state.recentCounteraction = previous.recentCounteraction
+            state.recentGlucoseChange = previous.recentGlucoseChange
+            state.openSensitivityEpisode = previous.openSensitivityEpisode
+            state.openSensitivityEpisodesByGlucose = previous.openSensitivityEpisodesByGlucose
         } else {
             let start = backfillStart(for: state, now: now)
             state.lastProcessedDate = start
@@ -204,7 +202,6 @@ final class TherapyOptimizer: ObservableObject {
             RepeatingScheduleValue(startTime: item.startTime, value: HKQuantity(unit: sensitivity.unit, doubleValue: item.value).doubleValue(for: .milligramsPerDeciliter) / scale)
         }
         return TherapyOptimizerState(
-            startedAt: now,
             timeZone: basal.timeZone,
             basal: TherapyOptimizerMath.hourlyValues(basal.items).map { $0 * scale },
             sensitivity: TherapyOptimizerMath.hourlyValues(sensitivityMilligrams),
@@ -227,23 +224,24 @@ final class TherapyOptimizer: ObservableObject {
         }
 
         let end = now.addingTimeInterval(-Self.processingDelay)
+        let calendar = state.calendar
+        applyDueDailyUpdate(to: &state)
         while state.lastProcessedDate < end {
             let chunkStart = state.lastProcessedDate
-            let chunkEnd = min(end, chunkStart.addingTimeInterval(24 * 3600))
+            // Chunks end at midnight, so each daily update sees exactly the days before it, as in replay.
+            let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: chunkStart)) ?? end
+            let chunkEnd = min(end, nextDay)
             guard processChunk(from: chunkStart, to: chunkEnd, state: &state) else {
                 break
             }
             state.lastProcessedDate = chunkEnd
+            applyDueDailyUpdate(to: &state)
         }
 
         if replay {
             let rawDays = loadRawDays(calendar: state.calendar)
-            TherapyOptimizerEngine.replay(&state, rawDays: rawDays, through: now)
+            TherapyOptimizerEngine.replay(&state, rawDays: rawDays, through: state.lastProcessedDate)
             log.default("Replayed %d stored days", rawDays.count)
-        } else if (state.lastDailyUpdate ?? .distantPast) < state.calendar.startOfDay(for: now),
-                  state.calendar.component(.hour, from: now) >= Self.dailyUpdateHour {
-            TherapyOptimizerEngine.applyDailyUpdate(to: &state, on: now)
-            log.default("Daily update applied (window %d days)", state.windowDays)
         }
         TherapyOptimizerEngine.compactAndPrune(&state, now: now)
         if let pruneBefore = state.calendar.date(byAdding: .day, value: -TherapyOptimizerState.retainedDays, to: state.calendar.startOfDay(for: now)) {
@@ -257,6 +255,14 @@ final class TherapyOptimizer: ObservableObject {
         DispatchQueue.main.async {
             self.isProcessing = false
         }
+    }
+
+    /// The update for a day runs once processing reaches that day.
+    private func applyDueDailyUpdate(to state: inout TherapyOptimizerState) {
+        let day = state.calendar.startOfDay(for: state.lastProcessedDate)
+        guard (state.lastDailyUpdate ?? .distantPast) < day else { return }
+        TherapyOptimizerEngine.applyDailyUpdate(to: &state, on: day)
+        log.default("Daily update applied (window %d days)", state.windowDays)
     }
 
     private func record(_ overrides: [TemporaryScheduleOverride], in state: inout TherapyOptimizerState) {
@@ -391,21 +397,22 @@ final class TherapyOptimizer: ObservableObject {
                 isOverrideActive: overrides.contains { $0.start < velocity.endDate && $0.end > velocity.startDate }
             )
         }
-        TherapyOptimizerEngine.ingest(intervals, scheduledBasal: scheduledBasal, into: &state)
+        TherapyOptimizerEngine.ingest(intervals, scheduledBasal: scheduledBasal, overrides: overrides, into: &state)
 
         let mealCutoff = state.mealCutoffDate
-        let meals = buildMeals(
+        let built = Self.buildMeals(
             entries: carbEntries.filter { $0.start >= mealCutoff && $0.start < end }.sorted { $0.start < $1.start },
             end: end,
-            carbsOnBoard: carbsOnBoard,
-            samples: samples,
+            carbsOnBoard: carbsOnBoard.map { (date: $0.startDate, grams: $0.quantity.doubleValue(for: .gram())) },
+            glucose: samples.map { (date: $0.startDate, value: $0.quantity.doubleValue(for: mgdl)) },
             doses: doses,
-            netInsulinOnBoard: netInsulinOnBoard,
+            netInsulinOnBoard: netInsulinOnBoard.map { (date: $0.startDate, units: $0.value) },
             scheduledBasal: scheduledBasal,
             unitScale: scale,
-            overrides: overrides,
-            state: &state
+            overrides: overrides
         )
+        let meals = built.meals
+        state.mealCutoffDate = built.cutoff
         TherapyOptimizerEngine.ingest(meals, into: &state)
 
         let range = start..<end
@@ -426,90 +433,103 @@ final class TherapyOptimizer: ObservableObject {
         return true
     }
 
-    /// Groups carb entries into meal windows that last until carbs on board are absorbed (at least 3 h).
-    private func buildMeals(
+    static let mealMinimumDuration: TimeInterval = 3 * 3600
+    static let mealMaximumDuration: TimeInterval = 10 * 3600
+    static let mealEndMaximumCarbs = 0.5
+    /// mg/dL within 15 minutes
+    static let mealEndMaximumGlucoseChange = 10.0
+    /// U100 units, either sign
+    static let mealEndMaximumInsulinOnBoard = 1.0
+
+    /// Groups carb entries into meal windows of at least 3 h that end once carbs are absorbed, glucose is stable and
+    /// little insulin is left; meals that don't settle within 10 h are skipped. `cutoff` is where the next call resumes.
+    static func buildMeals(
         entries: [(start: Date, grams: Double)],
         end: Date,
-        carbsOnBoard: [CarbValue],
-        samples: [StoredGlucoseSample],
+        carbsOnBoard: [(date: Date, grams: Double)],
+        glucose: [(date: Date, value: Double)],
         doses: [DoseEntry],
-        netInsulinOnBoard: [InsulinValue],
+        netInsulinOnBoard: [(date: Date, units: Double)],
         scheduledBasal: (Date) -> Double,
         unitScale: Double,
-        overrides: [DateInterval],
-        state: inout TherapyOptimizerState
-    ) -> [TherapyOptimizerMeal] {
-        let mgdl = HKUnit.milligramsPerDeciliter
-        let minimumDuration: TimeInterval = 3 * 3600
-        let maximumDuration: TimeInterval = 10 * 3600
-        var meals: [TherapyOptimizerMeal] = []
-        var cutoff = end
-        var index = 0
+        overrides: [DateInterval]
+    ) -> (meals: [TherapyOptimizerMeal], cutoff: Date) {
+        let reading = { (date: Date) -> Double? in
+            glucose.last { $0.date <= date && $0.date > date.addingTimeInterval(-10 * 60) }?.value
+        }
+        let averageGlucose = { (date: Date) -> Double? in
+            let values = glucose.filter { $0.date <= date && $0.date > date.addingTimeInterval(-15 * 60) }.suffix(3).map { $0.value }
+            return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+        }
+        // Strictly before the date, so a bolus at that date is counted once, as delivered.
+        let insulinOnBoard = { (date: Date) -> Double in
+            (netInsulinOnBoard.last { $0.date < date }?.units ?? 0) * unitScale
+        }
+        let isSettled = { (date: Date) -> Bool in
+            let carbs = (carbsOnBoard.last?.date ?? .distantPast) < date ? 0 : (carbsOnBoard.last { $0.date <= date }?.grams ?? 0)
+            guard carbs <= mealEndMaximumCarbs, abs(insulinOnBoard(date)) <= mealEndMaximumInsulinOnBoard,
+                  let now = reading(date), let before = reading(date.addingTimeInterval(-15 * 60)) else {
+                return false
+            }
+            return abs(now - before) <= mealEndMaximumGlucoseChange
+        }
 
+        var meals: [TherapyOptimizerMeal] = []
+        var index = 0
         while index < entries.count {
             let mealStart = entries[index].start
-            let earliestEnd = mealStart.addingTimeInterval(minimumDuration)
-            let mealEnd: Date
-            if let absorbed = carbsOnBoard.first(where: { $0.startDate >= earliestEnd && $0.quantity.doubleValue(for: .gram()) <= 0.5 }) {
-                mealEnd = absorbed.startDate
-            } else if earliestEnd <= end, (carbsOnBoard.last?.startDate ?? .distantPast) < earliestEnd {
-                mealEnd = earliestEnd
-            } else {
-                cutoff = mealStart
-                break
+            let latestEnd = mealStart.addingTimeInterval(mealMaximumDuration)
+            var candidate = mealStart.addingTimeInterval(mealMinimumDuration)
+            var settledAt: Date?
+            while settledAt == nil, candidate <= min(end, latestEnd) {
+                if isSettled(candidate) {
+                    settledAt = candidate
+                }
+                candidate = candidate.addingTimeInterval(5 * 60)
             }
-            guard mealEnd <= end else {
-                cutoff = mealStart
-                break
+            guard let mealEnd = settledAt else {
+                if end < latestEnd {
+                    return (meals, mealStart)
+                }
+                index += entries[index...].prefix(while: { $0.start < latestEnd }).count
+                continue
             }
 
             let grouped = entries[index...].prefix(while: { $0.start < mealEnd })
             index += grouped.count
-            guard mealEnd.timeIntervalSince(mealStart) <= maximumDuration,
-                  let glucoseStart = samples.last(where: { $0.startDate <= mealStart && $0.startDate > mealStart.addingTimeInterval(-15 * 60) }),
-                  let glucoseEnd = samples.last(where: { $0.startDate <= mealEnd && $0.startDate > mealEnd.addingTimeInterval(-15 * 60) }) else {
+            guard let glucoseStart = averageGlucose(mealStart), let glucoseEnd = averageGlucose(mealEnd) else {
                 continue
             }
 
-            let windowSamples = samples.filter { $0.startDate >= mealStart && $0.startDate <= mealEnd }
             let boluses = doses
                 .filter { $0.type == .bolus && $0.startDate >= mealStart && $0.startDate < mealEnd }
                 .reduce(0) { $0 + ($1.deliveredUnits ?? $1.programmedUnits) }
-            let netBasal = Self.netAdjustmentUnits(doses.filter { $0.type != .bolus }, from: mealStart, to: mealEnd)
-            let iobStart = netInsulinOnBoard.last(where: { $0.startDate <= mealStart })?.value ?? 0
-            let iobEnd = netInsulinOnBoard.last(where: { $0.startDate <= mealEnd })?.value ?? 0
+            let netBasal = netBasalUnits(doses, from: mealStart, to: mealEnd)
+            let windowGlucose = glucose.filter { $0.date >= mealStart && $0.date <= mealEnd }.map { $0.value }
 
             meals.append(TherapyOptimizerMeal(
                 start: mealStart,
                 end: mealEnd,
                 carbs: grouped.reduce(0) { $0 + $1.grams },
-                netInsulin: (boluses + netBasal + iobStart - iobEnd) * unitScale,
+                netInsulin: (boluses + netBasal) * unitScale + insulinOnBoard(mealStart) - insulinOnBoard(mealEnd),
                 scheduledBasalUnits: TherapyOptimizerMath.units(from: mealStart, to: mealEnd, rate: scheduledBasal),
-                glucoseStart: glucoseStart.quantity.doubleValue(for: mgdl),
-                glucoseEnd: glucoseEnd.quantity.doubleValue(for: mgdl),
-                minimumGlucose: windowSamples.map { $0.quantity.doubleValue(for: mgdl) }.min() ?? glucoseStart.quantity.doubleValue(for: mgdl),
-                isOverrideActive: overrides.contains { $0.start < mealEnd && $0.end > mealStart }
+                glucoseStart: glucoseStart,
+                glucoseEnd: glucoseEnd,
+                minimumGlucose: windowGlucose.min() ?? glucoseStart,
+                isOverrideActive: TherapyOptimizerEngine.isAffected(by: overrides, from: mealStart, to: mealEnd),
+                entryCount: grouped.count
             ))
         }
-
-        state.mealCutoffDate = cutoff
-        return meals
+        return (meals, end)
     }
 
-    /// Units delivered relative to the scheduled basal (temp basals, suspends, automatic boluses) in the range.
-    private static func netAdjustmentUnits(_ doses: [DoseEntry], from start: Date, to end: Date) -> Double {
+    /// Units delivered relative to the scheduled basal by temp basals and suspends in the range.
+    private static func netBasalUnits(_ doses: [DoseEntry], from start: Date, to end: Date) -> Double {
         var units = 0.0
-        for dose in doses {
-            switch dose.type {
-            case .tempBasal, .suspend:
-                let overlap = min(dose.endDate, end).timeIntervalSince(max(dose.startDate, start))
-                if overlap > 0 {
-                    units += dose.netBasalUnitsPerHour * overlap / 3600
-                }
-            case .bolus where dose.automatic == true && dose.startDate >= start && dose.startDate < end:
-                units += dose.deliveredUnits ?? dose.programmedUnits
-            default:
-                break
+        for dose in doses where dose.type == .tempBasal || dose.type == .suspend {
+            let overlap = min(dose.endDate, end).timeIntervalSince(max(dose.startDate, start))
+            if overlap > 0 {
+                units += dose.netBasalUnitsPerHour * overlap / 3600
             }
         }
         return units
@@ -561,7 +581,7 @@ final class TherapyOptimizer: ObservableObject {
 
     private func publish() {
         let snapshot = workingState
-        glucoseRanges.value = snapshot?.sensitivityByGlucose
+        dosingState.value = snapshot
         DispatchQueue.main.async {
             self.state = snapshot
         }
@@ -570,18 +590,11 @@ final class TherapyOptimizer: ObservableObject {
     // MARK: - Dosing
 
     /// Read from Loop's dosing queue, so kept apart from the main-thread `state`.
-    private let glucoseRanges = Locked<[TherapyOptimizerGlucoseRangeSensitivity]?>(nil)
+    let dosingState = Locked<TherapyOptimizerState?>(nil)
 
-    /// Factor for the insulin sensitivity used in correction dosing at this glucose; nil when the range has too little data
-    /// or glucose is low.
-    func dosingSensitivityFactor(forGlucose milligramsPerDeciliter: Double) -> Double? {
-        guard milligramsPerDeciliter >= TherapyOptimizerEngine.hypoThreshold, let ranges = glucoseRanges.value else { return nil }
-        let index = TherapyOptimizerEngine.glucoseRangeIndex(for: milligramsPerDeciliter)
-        guard index < ranges.count, ranges[index].dataDays >= TherapyOptimizerEngine.reliableHourDataDays, let factor = ranges[index].factor else {
-            return nil
-        }
-        let limits = TherapyOptimizerEngine.dosingSensitivityFactorRange
-        return min(max(factor, limits.lowerBound), limits.upperBound)
+    /// Factor for the insulin sensitivity used in correction dosing at this glucose; nil without trustworthy data.
+    func dosingSensitivityFactor(forGlucose milligramsPerDeciliter: Double, now: Date = Date()) -> Double? {
+        dosingState.value.flatMap { TherapyOptimizerEngine.dosingSensitivityFactor(forGlucose: milligramsPerDeciliter, in: $0, now: now) }
     }
 
     private func publishError(_ message: String) {
@@ -661,6 +674,8 @@ final class TherapyOptimizer: ObservableObject {
                     raw.basalSegments = Dictionary(segments.map { ($0.start, $0) }, uniquingKeysWith: { $1 }).values.sorted { $0.start < $1.start }
                     raw.intervals = Self.replacing(raw.intervals, in: range, with: intervals.filter { belongs($0.start) }, date: \.start)
                     raw.meals = raw.meals.filter { !range.contains($0.start) }
+                    let overrides = (raw.overrides ?? []) + chunk.overrides.filter { TherapyOptimizerEngine.isAffected(by: [$0], from: day, to: dayEnd) }
+                    raw.overrides = Dictionary(overrides.map { ($0.start, $0) }, uniquingKeysWith: { $1 }).values.sorted { $0.start < $1.start }
                 }
                 let mealStarts = Set(meals.map { $0.start })
                 raw.meals = (raw.meals.filter { !mealStarts.contains($0.start) } + meals.filter { belongs($0.start) }).sorted { $0.start < $1.start }

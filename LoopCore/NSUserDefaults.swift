@@ -24,8 +24,8 @@ extension UserDefaults {
         case LastMissedMealNotification = "com.loopkit.Loop.lastMissedMealNotification"
         case userRequestedLoopReset = "com.loopkit.Loop.userRequestedLoopReset"
         case liveActivity = "com.loopkit.Loop.liveActivity"
-        case customLoopIntervalEnabled = "com.loopkit.Loop.customLoopIntervalEnabled"
-        case customLoopInterval = "com.loopkit.Loop.customLoopInterval"
+        case podCommunicationIntervalEnabled = "com.loopkit.Loop.customLoopIntervalEnabled"
+        case podCommunicationInterval = "com.loopkit.Loop.customLoopInterval"
         case suppressPodCommunicationInBackground = "com.loopkit.Loop.suppressPodCommunicationInBackground"
         case glucoseUrgentLow = "com.loopkit.Loop.glucoseUrgentLow"
         case glucoseLow = "com.loopkit.Loop.glucoseLow"
@@ -212,24 +212,24 @@ extension UserDefaults {
 // `StoredSettings` lives in LoopKit and cannot be extended here, so these fork-specific settings are
 // persisted in the app group instead. They are read back in `SettingsManager.loopSettings`.
 extension UserDefaults {
-    public var customLoopIntervalEnabled: Bool {
+    public var podCommunicationIntervalEnabled: Bool {
         get {
-            bool(forKey: Key.customLoopIntervalEnabled.rawValue)
+            bool(forKey: Key.podCommunicationIntervalEnabled.rawValue)
         }
         set {
-            set(newValue, forKey: Key.customLoopIntervalEnabled.rawValue)
+            set(newValue, forKey: Key.podCommunicationIntervalEnabled.rawValue)
         }
     }
 
-    public var customLoopInterval: TimeInterval {
+    public var podCommunicationInterval: TimeInterval {
         get {
-            guard let interval = object(forKey: Key.customLoopInterval.rawValue) as? TimeInterval else {
-                return LoopSettings.defaultCustomLoopInterval
+            guard let interval = object(forKey: Key.podCommunicationInterval.rawValue) as? TimeInterval else {
+                return LoopSettings.defaultPodCommunicationInterval
             }
-            return LoopSettings.clampedCustomLoopInterval(interval)
+            return LoopSettings.clampedPodCommunicationInterval(interval)
         }
         set {
-            set(LoopSettings.clampedCustomLoopInterval(newValue), forKey: Key.customLoopInterval.rawValue)
+            set(LoopSettings.clampedPodCommunicationInterval(newValue), forKey: Key.podCommunicationInterval.rawValue)
         }
     }
 
@@ -242,19 +242,14 @@ extension UserDefaults {
         }
     }
 
-    /// Same rule as `LoopSettings.effectiveLoopInterval`, for callers that have no access to `LoopSettings`.
-    public var effectiveLoopInterval: TimeInterval {
-        LoopSettings.effectiveLoopInterval(customLoopIntervalEnabled: customLoopIntervalEnabled, customLoopInterval: customLoopInterval)
-    }
-
     public var glucoseDisplayRange: GlucoseDisplayRange {
         get {
             let defaultRange = GlucoseDisplayRange()
             return GlucoseDisplayRange(
-                urgentLow: glucoseThreshold(.glucoseUrgentLow, legacyKey: "com.loopkit.Loop.glucoseDisplayUrgentLow") ?? defaultRange.urgentLow,
-                low: glucoseThreshold(.glucoseLow, legacyKey: "com.loopkit.Loop.glucoseDisplayLow") ?? defaultRange.low,
-                high: glucoseThreshold(.glucoseHigh, legacyKey: "com.loopkit.Loop.glucoseDisplayHigh") ?? defaultRange.high,
-                urgentHigh: glucoseThreshold(.glucoseUrgentHigh, legacyKey: "com.loopkit.Loop.glucoseDisplayUrgentHigh") ?? defaultRange.urgentHigh
+                urgentLow: object(forKey: Key.glucoseUrgentLow.rawValue) as? Double ?? defaultRange.urgentLow,
+                low: object(forKey: Key.glucoseLow.rawValue) as? Double ?? defaultRange.low,
+                high: object(forKey: Key.glucoseHigh.rawValue) as? Double ?? defaultRange.high,
+                urgentHigh: object(forKey: Key.glucoseUrgentHigh.rawValue) as? Double ?? defaultRange.urgentHigh
             )
         }
         set {
@@ -263,9 +258,5 @@ extension UserDefaults {
             set(newValue.high, forKey: Key.glucoseHigh.rawValue)
             set(newValue.urgentHigh, forKey: Key.glucoseUrgentHigh.rawValue)
         }
-    }
-
-    private func glucoseThreshold(_ key: Key, legacyKey: String) -> Double? {
-        return (object(forKey: key.rawValue) as? Double) ?? (object(forKey: legacyKey) as? Double)
     }
 }
