@@ -233,6 +233,7 @@ class ServicesManager {
 
 public protocol ServicesManagerDosingDelegate: AnyObject {
     func deliverBolus(amountInUnits: Double) async throws
+    func roundToNearestSupportedBolusVolume(units: Double) -> Double
 }
 
 public protocol ServicesManagerDelegate: AnyObject {
@@ -329,10 +330,19 @@ extension ServicesManager: ServiceDelegate {
         }
     }
     
+    /// With concentrated insulin the remote amount is IU; Loop doses and limits are pump units.
     func deliverRemoteBolus(amountInUnits: Double) async throws {
+        let concentration = InsulinConcentrationHistory.current
+        let pumpUnits: Double
+        if concentration == .u100 {
+            pumpUnits = amountInUnits
+        } else {
+            let unrounded = amountInUnits / concentration.unitsPerPumpUnit
+            pumpUnits = servicesManagerDosingDelegate?.roundToNearestSupportedBolusVolume(units: unrounded) ?? unrounded
+        }
         do {
             
-            guard amountInUnits > 0 else {
+            guard amountInUnits > 0, pumpUnits > 0 else {
                 throw BolusActionError.invalidBolus
             }
             
@@ -340,16 +350,16 @@ extension ServicesManager: ServiceDelegate {
                 throw BolusActionError.missingMaxBolus
             }
             
-            guard amountInUnits <= maxBolusAmount else {
+            guard pumpUnits <= maxBolusAmount else {
                 throw BolusActionError.exceedsMaxBolus
             }
             
-            try await servicesManagerDosingDelegate?.deliverBolus(amountInUnits: amountInUnits)
-            await NotificationManager.sendRemoteBolusNotification(amount: amountInUnits)
+            try await servicesManagerDosingDelegate?.deliverBolus(amountInUnits: pumpUnits)
+            await NotificationManager.sendRemoteBolusNotification(amountInUnits: amountInUnits, pumpUnits: pumpUnits)
             await remoteDataServicesManager.triggerUpload(for: .dose)
             analyticsServicesManager.didBolus(source: "Remote")
         } catch {
-            await NotificationManager.sendRemoteBolusFailureNotification(for: error, amountInUnits: amountInUnits)
+            await NotificationManager.sendRemoteBolusFailureNotification(for: error, amountInUnits: amountInUnits, pumpUnits: pumpUnits)
             throw error
         }
     }

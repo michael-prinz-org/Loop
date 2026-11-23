@@ -1662,6 +1662,14 @@ extension DeviceDataManager: ServicesManagerDosingDelegate {
     func deliverBolus(amountInUnits: Double) async throws {
         try await enactBolus(units: amountInUnits, activationType: .manualNoRecommendation)
     }
+
+    func roundToNearestSupportedBolusVolume(units: Double) -> Double {
+        guard let volumes = pumpManager?.supportedBolusVolumes, !volumes.isEmpty else {
+            return units
+        }
+        // Largest first so an exact half step rounds up; the tolerance keeps floating point from breaking ties.
+        return volumes.reversed().min(by: { abs($0 - units) < abs($1 - units) - 1e-9 }) ?? units
+    }
     
 }
 

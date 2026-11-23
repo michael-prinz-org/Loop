@@ -1875,7 +1875,7 @@ struct NewTherapyProfileSheet: View {
     }
 }
 
-/// Old and new basal rates in IU/hr and the daily total, shown before a converted profile is saved.
+/// Old and new basal rates and delivery limits in pump units, with the daily basal total in IU, shown before a converted profile is saved.
 struct BasalConversionPreview: View {
     let source: TherapyProfile
     let target: InsulinConcentration
@@ -1895,19 +1895,28 @@ struct BasalConversionPreview: View {
     var body: some View {
         switch Swift.Result<TherapyProfile, Error>(catching: { try source.converted(toConcentration: target, name: source.name) }) {
         case .success(let converted):
-            Section(header: Text(String(format: NSLocalizedString("Basal Rates %1$@ → %2$@ in IU/hr", comment: "Header of the basal conversion preview (1: source concentration, 2: target concentration)"), source.concentration.label, target.label)),
-                    footer: Text(NSLocalizedString("Converted rates are rounded down to the pump's 0.05 U/hr steps, so no rate increases.", comment: "Footer of the basal conversion preview"))) {
-                ForEach(Array(zip(source.basalRatesInInternationalUnits, converted.basalRatesInInternationalUnits).enumerated()), id: \.offset) { item in
+            Section(header: Text(String(format: NSLocalizedString("Pump Units %1$@ → %2$@", comment: "Header of the basal conversion preview (1: source concentration, 2: target concentration)"), source.concentration.label, target.label)),
+                    footer: Text(String(format: NSLocalizedString("Daily basal total: %1$@ IU → %2$@ IU. Converted rates and limits are rounded down to the pump's 0.05 steps, so no rate increases in IU.", comment: "Footer of the basal conversion preview (1: old daily basal in IU, 2: new daily basal in IU)"), number(source.dailyBasalInInternationalUnits), number(converted.dailyBasalInInternationalUnits)))) {
+                ForEach(Array(zip(source.basalRateSchedule.items, converted.basalRateSchedule.items).enumerated()), id: \.offset) { item in
                     HStack {
                         Text(TherapyProfileError.scheduleTimeString(item.element.0.startTime))
                         Spacer()
-                        Text("\(number(item.element.0.value)) → \(number(item.element.1.value))")
+                        Text("\(number(item.element.0.value)) → \(number(item.element.1.value)) U/hr")
                     }
                 }
-                HStack {
-                    Text(NSLocalizedString("Daily Total (IU)", comment: "Daily basal total row of the basal conversion preview"))
-                    Spacer()
-                    Text("\(number(source.dailyBasalInInternationalUnits)) → \(number(converted.dailyBasalInInternationalUnits))")
+                if let oldMaximum = source.maximumBasalRatePerHour, let newMaximum = converted.maximumBasalRatePerHour {
+                    HStack {
+                        Text(NSLocalizedString("Maximum Basal Rate", comment: "Maximum basal rate row of the basal conversion preview"))
+                        Spacer()
+                        Text("\(number(oldMaximum)) → \(number(newMaximum)) U/hr")
+                    }
+                }
+                if let oldMaximum = source.maximumBolus, let newMaximum = converted.maximumBolus {
+                    HStack {
+                        Text(NSLocalizedString("Maximum Bolus", comment: "Maximum bolus row of the basal conversion preview"))
+                        Spacer()
+                        Text("\(number(oldMaximum)) → \(number(newMaximum)) U")
+                    }
                 }
             }
         case .failure(let error):

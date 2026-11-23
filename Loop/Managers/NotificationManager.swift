@@ -115,23 +115,26 @@ extension NotificationManager {
         UNUserNotificationCenter.current().add(request)
     }
     
-    /// Remote bolus amounts are pump units; with concentrated insulin the title names it.
-    private static func remoteBolusTitle(amountDescription: String) -> String {
+    /// With concentrated insulin the remote amount is IU; the title also names the pump units delivered.
+    private static func remoteBolusTitle(amountInUnits: Double, pumpUnits: Double) -> String? {
+        let numberFormatter = QuantityFormatter(for: .internationalUnit()).numberFormatter
+        guard let amountDescription = numberFormatter.string(from: amountInUnits) else {
+            return nil
+        }
         let concentration = InsulinConcentrationHistory.current
-        guard concentration != .u100 else {
+        guard concentration != .u100, let pumpUnitsDescription = numberFormatter.string(from: pumpUnits) else {
             return String(format: NSLocalizedString("Remote Bolus Entry: %@ U", comment: "The notification title for a remote bolus. (1: Bolus amount)"), amountDescription)
         }
-        return String(format: NSLocalizedString("Remote Bolus Entry: %1$@ U (%2$@ pump units)", comment: "The notification title for a remote bolus while concentrated insulin is in use. (1: Bolus amount, 2: insulin concentration, e.g. U200)"), amountDescription, concentration.label)
+        return String(format: NSLocalizedString("Remote Bolus Entry: %1$@ IU (%2$@ %3$@ pump units)", comment: "The notification title for a remote bolus while concentrated insulin is in use. (1: requested amount in IU, 2: amount in pump units, 3: insulin concentration, e.g. U200)"), amountDescription, pumpUnitsDescription, concentration.label)
     }
 
     @MainActor
-    static func sendRemoteBolusNotification(amount: Double) {
+    static func sendRemoteBolusNotification(amountInUnits: Double, pumpUnits: Double) {
         let notification = UNMutableNotificationContent()
-        let quantityFormatter = QuantityFormatter(for: .internationalUnit())
-        guard let amountDescription = quantityFormatter.numberFormatter.string(from: amount) else {
+        guard let title = remoteBolusTitle(amountInUnits: amountInUnits, pumpUnits: pumpUnits) else {
             return
         }
-        notification.title = remoteBolusTitle(amountDescription: amountDescription)
+        notification.title = title
         
         let body = "Success!"
 
@@ -148,14 +151,13 @@ extension NotificationManager {
     }
     
     @MainActor
-    static func sendRemoteBolusFailureNotification(for error: Error, amountInUnits: Double) {
+    static func sendRemoteBolusFailureNotification(for error: Error, amountInUnits: Double, pumpUnits: Double) {
         let notification = UNMutableNotificationContent()
-        let quantityFormatter = QuantityFormatter(for: .internationalUnit())
-        guard let amountDescription = quantityFormatter.numberFormatter.string(from: amountInUnits) else {
+        guard let title = remoteBolusTitle(amountInUnits: amountInUnits, pumpUnits: pumpUnits) else {
             return
         }
 
-        notification.title = remoteBolusTitle(amountDescription: amountDescription)
+        notification.title = title
         notification.body = error.localizedDescription
         notification.sound = .default
 
