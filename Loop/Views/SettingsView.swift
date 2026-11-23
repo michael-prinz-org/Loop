@@ -1893,7 +1893,7 @@ struct BasalConversionPreview: View {
     }
 
     var body: some View {
-        switch Result(catching: { try source.converted(toConcentration: target, name: source.name) }) {
+        switch Swift.Result<TherapyProfile, Error>(catching: { try source.converted(toConcentration: target, name: source.name) }) {
         case .success(let converted):
             Section(header: Text(String(format: NSLocalizedString("Basal Rates %1$@ → %2$@ in IU/hr", comment: "Header of the basal conversion preview (1: source concentration, 2: target concentration)"), source.concentration.label, target.label)),
                     footer: Text(NSLocalizedString("Converted rates are rounded down to the pump's 0.05 U/hr steps, so no rate increases.", comment: "Footer of the basal conversion preview"))) {
