@@ -15,7 +15,7 @@ import SwiftUI
 import HealthKit
 
 public struct SettingsView: View {
-    @EnvironmentObject private var displayGlucosePreference: DisplayGlucosePreference
+    @EnvironmentObject var displayGlucosePreference: DisplayGlucosePreference
     @Environment(\.dismissAction) private var dismiss
     @Environment(\.appName) private var appName
     @Environment(\.guidanceColors) private var guidanceColors
@@ -1875,7 +1875,7 @@ struct NewTherapyProfileSheet: View {
     }
 }
 
-/// Old and new basal rates and delivery limits in pump units, with the daily basal total in IU, shown before a converted profile is saved.
+/// Old and new basal rates, delivery limits, carb ratios and insulin sensitivities in pump units, with the daily basal total in IU, shown before a converted profile is saved.
 struct BasalConversionPreview: View {
     let source: TherapyProfile
     let target: InsulinConcentration
@@ -1890,6 +1890,22 @@ struct BasalConversionPreview: View {
 
     private func number(_ value: Double) -> String {
         Self.formatter.string(from: NSNumber(value: value)) ?? ""
+    }
+
+    private func number(_ value: Double, fractionDigits: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = fractionDigits
+        return formatter.string(from: NSNumber(value: value)) ?? ""
+    }
+
+    private var factor: Double {
+        target.unitsPerPumpUnit / source.concentration.unitsPerPumpUnit
+    }
+
+    private var sensitivityFractionDigits: Int {
+        source.insulinSensitivitySchedule.unit == .milligramsPerDeciliter ? 0 : 1
     }
 
     var body: some View {
@@ -1916,6 +1932,25 @@ struct BasalConversionPreview: View {
                         Text(NSLocalizedString("Maximum Bolus", comment: "Maximum bolus row of the basal conversion preview"))
                         Spacer()
                         Text("\(number(oldMaximum)) → \(number(newMaximum)) U")
+                    }
+                }
+            }
+            Section(header: Text(NSLocalizedString("Carb Ratios", comment: "Header of the carb ratio rows of the conversion preview"))) {
+                ForEach(Array(zip(source.carbRatioSchedule.items, converted.carbRatioSchedule.items).enumerated()), id: \.offset) { item in
+                    HStack {
+                        Text(TherapyProfileError.scheduleTimeString(item.element.0.startTime))
+                        Spacer()
+                        Text("\(number(item.element.0.value, fractionDigits: 1)) → \(number(item.element.1.value, fractionDigits: 1)) g/U")
+                    }
+                }
+            }
+            Section(header: Text(NSLocalizedString("Insulin Sensitivities", comment: "Header of the insulin sensitivity rows of the conversion preview")),
+                    footer: Text(String(format: NSLocalizedString("Carb ratios and insulin sensitivities are multiplied by %@ because one pump unit now holds that much more or less insulin.", comment: "Footer of the carb ratio and insulin sensitivity conversion preview (1: conversion factor, e.g. 2 or 0.5)"), number(factor, fractionDigits: 1)))) {
+                ForEach(Array(zip(source.insulinSensitivitySchedule.items, converted.insulinSensitivitySchedule.items).enumerated()), id: \.offset) { item in
+                    HStack {
+                        Text(TherapyProfileError.scheduleTimeString(item.element.0.startTime))
+                        Spacer()
+                        Text("\(number(item.element.0.value, fractionDigits: sensitivityFractionDigits)) → \(number(item.element.1.value, fractionDigits: sensitivityFractionDigits)) \(source.insulinSensitivitySchedule.unit.localizedShortUnitString)/U")
                     }
                 }
             }

@@ -12,7 +12,8 @@ import LoopKitUI
 
 public struct IntegralRetrospectiveCorrectionSelectionView: View {
     @Binding var isIntegralRetrospectiveCorrectionEnabled: Bool
-    
+    @Binding var isDynamicISFEnabled: Bool
+
     public var body: some View {
         ScrollView {
             VStack(spacing: 10) {
@@ -26,8 +27,19 @@ public struct IntegralRetrospectiveCorrectionSelectionView: View {
                     .foregroundColor(.secondary)
                 Divider()
 
-                Toggle(NSLocalizedString("Enable Integral Retrospective Correction", comment: "Title for Integral Retrospective Correction toggle"), isOn: $isIntegralRetrospectiveCorrectionEnabled)
-                    .padding(.top, 20)
+                ExclusiveExperimentToggle(
+                    title: NSLocalizedString("Enable Integral Retrospective Correction", comment: "Title for Integral Retrospective Correction toggle"),
+                    isOn: $isIntegralRetrospectiveCorrectionEnabled,
+                    otherName: ExperimentName.dynamicISF,
+                    otherIsOn: $isDynamicISFEnabled
+                )
+                .padding(.top, 20)
+
+                if isDynamicISFEnabled {
+                    Text(ExperimentName.exclusionHint(other: ExperimentName.dynamicISF))
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
             }
             .padding()
         }
@@ -38,6 +50,6 @@ public struct IntegralRetrospectiveCorrectionSelectionView: View {
 
 struct IntegralRetrospectiveCorrectionSelectionView_Previews: PreviewProvider {
     static var previews: some View {
-        IntegralRetrospectiveCorrectionSelectionView(isIntegralRetrospectiveCorrectionEnabled: .constant(true))
+        IntegralRetrospectiveCorrectionSelectionView(isIntegralRetrospectiveCorrectionEnabled: .constant(true), isDynamicISFEnabled: .constant(false))
     }
 }

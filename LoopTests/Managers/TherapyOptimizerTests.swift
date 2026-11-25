@@ -284,34 +284,17 @@ final class TherapyOptimizerTests: XCTestCase {
         XCTAssertTrue(state.summaries.allSatisfy { $0.sensitivityAllDay.count == 0 })
     }
 
-    func testSensitivityFactorPerGlucoseRange() {
-        var state = makeState()
-        // 120 mg/dL: falls as predicted for 3 h (estimate 50). 200 mg/dL: falls only 0.8x as fast for 1 h (estimate 40).
-        let normal = series(from: day0.addingTimeInterval(19 * hour), count: 36) { self.interval(at: $0, insulinVelocity: -1.0, glucose: 120) }
-        let high = series(from: day0.addingTimeInterval(22 * hour), count: 12) { self.interval(at: $0, counteraction: 0.2, insulinVelocity: -1.0, glucose: 200) }
-        TherapyOptimizerEngine.ingest(normal + high, scheduledBasal: { _ in 1.0 }, into: &state)
-        TherapyOptimizerEngine.applyDailyUpdate(to: &state, on: day0.addingTimeInterval(day))
-
-        let ranges = state.sensitivityByGlucose ?? []
-        XCTAssertEqual(ranges.count, 5)
-        XCTAssertEqual(state.sensitivityByGlucoseReference?.sensitivity ?? 0, 50, accuracy: 0.0001)
-        XCTAssertEqual(ranges[2].factor ?? 0, 1.0, accuracy: 0.0001)
-        XCTAssertEqual(ranges[3].factor ?? 0, 0.8, accuracy: 0.0001)
-        XCTAssertEqual(ranges[3].sensitivity ?? 0, 40, accuracy: 0.0001)
-        XCTAssertNil(ranges[0].factor)
-        XCTAssertEqual(ranges[0].dataDays, 0)
-    }
-
-    func testStateWithoutGlucoseRangesStillDecodes() throws {
+    func testStateWithRemovedGlucoseRangesStillDecodes() throws {
         var state = makeState()
         state.summaries = [TherapyOptimizerDaySummary(day: day0)]
         var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as! [String: Any]
-        json.removeValue(forKey: "sensitivityByGlucose")
+        json["sensitivityByGlucose"] = [["sensitivity": 40, "factor": 0.8, "dataDays": 3]]
+        json["sensitivityByGlucoseReference"] = ["sensitivity": 50, "factor": 1, "dataDays": 3]
         var summaries = json["summaries"] as! [[String: Any]]
-        summaries[0].removeValue(forKey: "sensitivityByGlucose")
+        summaries[0]["sensitivityByGlucose"] = [["values": [40], "count": 1]]
         json["summaries"] = summaries
         let decoded = try JSONDecoder().decode(TherapyOptimizerState.self, from: JSONSerialization.data(withJSONObject: json))
-        XCTAssertNil(decoded.summaries[0].sensitivityByGlucose)
+        XCTAssertEqual(decoded, state)
     }
 
     /// State written before episodes and meal-based carb ratios: unweighted estimates, carb ratio estimates, startedAt.
@@ -756,50 +739,6 @@ final class TherapyOptimizerTests: XCTestCase {
         state.overrideIntervals = [DateInterval(start: day0, duration: hour)]
         let decoded = try JSONDecoder().decode(TherapyOptimizerState.self, from: JSONEncoder().encode(state))
         XCTAssertEqual(decoded, state)
-    }
-
-    // MARK: - Glucose-dependent factor
-
-    private func factorState(_ factors: [Double?], dataDays: Int = 1_000_000, latestDay: Date? = nil) -> TherapyOptimizerState {
-        var state = makeState()
-        state.summaries = [TherapyOptimizerDaySummary(day: latestDay ?? day0)]
-        state.sensitivityByGlucoseReference = TherapyOptimizerGlucoseRangeSensitivity(sensitivity: 50, factor: 1, dataDays: dataDays)
-        state.sensitivityByGlucose = factors.map { TherapyOptimizerGlucoseRangeSensitivity(sensitivity: nil, factor: $0, dataDays: dataDays) }
-        return state
-    }
-
-    private func factor(_ glucose: Double, _ state: TherapyOptimizerState, now: Date? = nil) -> Double? {
-        TherapyOptimizerEngine.dosingSensitivityFactor(forGlucose: glucose, in: state, now: now ?? day0.addingTimeInterval(day))
-    }
-
-    func testFactorIsContinuousAcrossRangeBorders() {
-        let state = factorState([nil, 1.2, 1.0, 0.85, 1.1])
-        for border in [100.0, 180, 250] {
-            XCTAssertEqual(factor(border - 0.01, state) ?? 0, factor(border + 0.01, state) ?? 1, accuracy: 0.001, "at \(border)")
-        }
-        XCTAssertEqual(factor(140, state) ?? 0, 1.0, accuracy: 0.001)
-        XCTAssertEqual(factor(177.5, state) ?? 0, 0.925, accuracy: 0.001)
-        XCTAssertEqual(factor(70, state) ?? 0, 1.2, accuracy: 0.001)
-        XCTAssertEqual(factor(400, state) ?? 0, 1.1, accuracy: 0.001)
-    }
-
-    func testFactorShrinksTowardOneWithFewDataDays() {
-        XCTAssertEqual(factor(215, factorState(Array(repeating: 0.9, count: 5), dataDays: 14)) ?? 0, 0.95, accuracy: 0.0001)
-        XCTAssertEqual(factor(215, factorState([nil, nil, nil, nil, nil], dataDays: 14)) ?? 0, 1.0, accuracy: 0.0001)
-    }
-
-    func testFactorIsClamped() {
-        XCTAssertEqual(factor(215, factorState(Array(repeating: 0.5, count: 5))) ?? 0, 0.8, accuracy: 0.0001)
-        XCTAssertEqual(factor(215, factorState(Array(repeating: 2.0, count: 5))) ?? 0, 1.2, accuracy: 0.0001)
-    }
-
-    func testNoFactorBelowSeventyWithTooFewDaysOrStaleData() {
-        let state = factorState(Array(repeating: 0.9, count: 5))
-        XCTAssertNil(factor(69.9, state))
-        XCTAssertNotNil(factor(70, state))
-        XCTAssertNil(factor(150, factorState(Array(repeating: 0.9, count: 5), dataDays: 2)))
-        XCTAssertNotNil(factor(150, state, now: day0.addingTimeInterval(3 * day)))
-        XCTAssertNil(factor(150, state, now: day0.addingTimeInterval(3 * day + 1)))
     }
 
     func testGridRounding() {

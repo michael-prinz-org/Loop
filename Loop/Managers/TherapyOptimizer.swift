@@ -10,8 +10,7 @@
 //  needs 3 data days per hour, is shrunk toward the profile and smoothed with its neighbour hours; carb ratios
 //  are total carbs over total insulin of at least 3 meals around each hour. Every value moves at most 10 %
 //  a day within 0.7...1.3 x the profile.
-//  Calculated values reach Loop when the user applies them to a profile; the glucose-dependent factor also through
-//  a profile's "Use for Corrections", limited to the correction share of a recommendation.
+//  Calculated values reach Loop only when the user applies them to a profile.
 //
 
 import Foundation
@@ -169,9 +168,7 @@ struct TherapyOptimizerDaySummary: Codable, Equatable {
     var basalDeviation = Array(repeating: TherapyOptimizerRateSum(), count: 24)
     var sensitivity = Array(repeating: TherapyOptimizerEstimates(), count: 24)
     var sensitivityAllDay = TherapyOptimizerEstimates()
-    /// Optional so state saved before this field existed still decodes.
-    var sensitivityByGlucose: [TherapyOptimizerEstimates]?
-    /// Completed meals starting this day, evaluated at each daily update; optional like above.
+    /// Completed meals starting this day, evaluated at each daily update; optional so older state still decodes.
     var meals: [TherapyOptimizerMeal]?
     var isCompacted = false
 
@@ -184,11 +181,6 @@ struct TherapyOptimizerDaySummary: Codable, Equatable {
             sensitivity[hour].compact()
         }
         sensitivityAllDay.compact()
-        sensitivityByGlucose = sensitivityByGlucose?.map { estimates in
-            var estimates = estimates
-            estimates.compact()
-            return estimates
-        }
         isCompacted = true
     }
 }
@@ -230,14 +222,6 @@ struct TherapyOptimizerSensitivityEpisode: Codable, Equatable {
         let ratio = min(max(observed / expected, range.lowerBound), range.upperBound)
         return sensitivityTimesExpected / expected * ratio
     }
-}
-
-/// Insulin sensitivity observed while glucose was within one range, relative to the overall value.
-struct TherapyOptimizerGlucoseRangeSensitivity: Codable, Equatable {
-    /// mg/dL/U
-    var sensitivity: Double?
-    var factor: Double?
-    var dataDays: Int
 }
 
 /// 24 hourly values plus an all-day value, each with its start value and the number of days with data.
@@ -310,12 +294,6 @@ struct TherapyOptimizerState: Codable, Equatable {
     /// Glucose change of the last 30 minutes of intervals, mg/dL each.
     var recentGlucoseChange: [Double]?
     var openSensitivityEpisode: TherapyOptimizerSensitivityEpisode?
-    /// One per glucose range; an episode's intervals also count separately per range.
-    var openSensitivityEpisodesByGlucose: [TherapyOptimizerSensitivityEpisode?]?
-    /// One entry per `TherapyOptimizerEngine.glucoseRangeUpperBounds` range; dosing reads them via `dosingSensitivityFactor`.
-    var sensitivityByGlucose: [TherapyOptimizerGlucoseRangeSensitivity]?
-    /// Overall observed sensitivity the per-range factors are relative to.
-    var sensitivityByGlucoseReference: TherapyOptimizerGlucoseRangeSensitivity?
 
     /// All values are in U100 units.
     init(timeZone: TimeZone, basal: [Double], sensitivity: [Double], carbRatio: [Double], sensitivityUnit: HKUnit, processingStart: Date) {
@@ -356,7 +334,6 @@ struct TherapyOptimizerState: Codable, Equatable {
         recentCounteraction = nil
         recentGlucoseChange = nil
         openSensitivityEpisode = nil
-        openSensitivityEpisodesByGlucose = nil
     }
 }
 
@@ -484,20 +461,6 @@ enum TherapyOptimizerEngine {
     static let carbRatioMinimumMeals = 3
     /// Meals starting within this many hours of an hour count for its carb ratio.
     static let carbRatioBlockHours = 1
-    /// mg/dL; values at or above the last bound fall into an extra top range.
-    static let glucoseRangeUpperBounds: [Double] = [70, 100, 180, 250]
-    static var glucoseRangeCount: Int { glucoseRangeUpperBounds.count + 1 }
-    /// mg/dL; centre of each range from 70 up, between which the dosing factor is interpolated.
-    static let glucoseRangeCentres: [Double] = [85, 140, 215, 285]
-    static let glucoseRangeMinimumDaily = 1
-    /// Limits of the glucose-dependent factor when it is used for correction dosing.
-    static let dosingSensitivityFactorRange = 0.8...1.2
-    static let dosingSensitivityShrinkageDays = 14.0
-    static let dosingSensitivityMaximumAge: TimeInterval = 3 * 24 * 3600
-
-    static func glucoseRangeIndex(for glucose: Double) -> Int {
-        glucoseRangeUpperBounds.firstIndex { glucose < $0 } ?? glucoseRangeUpperBounds.count
-    }
 
     /// Whether an override or its after-effect (4 h, insulin dosed with its settings) touches the range.
     static func isAffected(by overrides: [DateInterval], from start: Date, to end: Date) -> Bool {
@@ -581,38 +544,18 @@ enum TherapyOptimizerEngine {
         total.add(observed: observed, expected: expected, sensitivity: interval.sensitivity, minutes: minutes, end: interval.end)
         state.openSensitivityEpisode = total
 
-        let range = glucoseRangeIndex(for: interval.glucose)
-        var byGlucose = state.openSensitivityEpisodesByGlucose ?? Array(repeating: nil, count: glucoseRangeCount)
-        var part = byGlucose[range] ?? TherapyOptimizerSensitivityEpisode(start: interval.start, end: interval.end)
-        part.add(observed: observed, expected: expected, sensitivity: interval.sensitivity, minutes: minutes, end: interval.end)
-        byGlucose[range] = part
-        state.openSensitivityEpisodesByGlucose = byGlucose
-
         closeSensitivityEpisodes(calendar: calendar, in: &state) { $0.minutes >= sensitivityEpisodeMaximumMinutes }
     }
 
-    /// Turns the open episodes matching `shouldClose` into estimates, attributed to the day and hour of their middle.
+    /// Turns the open episode into an estimate when it matches `shouldClose`, attributed to the day and hour of its middle.
     private static func closeSensitivityEpisodes(calendar: Calendar, in state: inout TherapyOptimizerState, where shouldClose: (TherapyOptimizerSensitivityEpisode) -> Bool = { _ in true }) {
-        if let episode = state.openSensitivityEpisode, shouldClose(episode) {
-            state.openSensitivityEpisode = nil
-            if let estimate = episode.estimate {
-                let index = summaryIndex(for: episode.middle, calendar: calendar, in: &state)
-                state.summaries[index].sensitivity[calendar.component(.hour, from: episode.middle)].add(estimate, weight: -episode.expected)
-                state.summaries[index].sensitivityAllDay.add(estimate, weight: -episode.expected)
-            }
+        guard let episode = state.openSensitivityEpisode, shouldClose(episode) else { return }
+        state.openSensitivityEpisode = nil
+        if let estimate = episode.estimate {
+            let index = summaryIndex(for: episode.middle, calendar: calendar, in: &state)
+            state.summaries[index].sensitivity[calendar.component(.hour, from: episode.middle)].add(estimate, weight: -episode.expected)
+            state.summaries[index].sensitivityAllDay.add(estimate, weight: -episode.expected)
         }
-        guard var byGlucose = state.openSensitivityEpisodesByGlucose else { return }
-        for range in byGlucose.indices {
-            guard let episode = byGlucose[range], shouldClose(episode) else { continue }
-            byGlucose[range] = nil
-            if let estimate = episode.estimate {
-                let index = summaryIndex(for: episode.middle, calendar: calendar, in: &state)
-                var estimates = state.summaries[index].sensitivityByGlucose ?? Array(repeating: TherapyOptimizerEstimates(), count: glucoseRangeCount)
-                estimates[range].add(estimate, weight: -episode.expected)
-                state.summaries[index].sensitivityByGlucose = estimates
-            }
-        }
-        state.openSensitivityEpisodesByGlucose = byGlucose.contains { $0 != nil } ? byGlucose : nil
     }
 
     /// Meals are kept per day and evaluated with the then current basal and sensitivity at each daily update.
@@ -725,16 +668,6 @@ enum TherapyOptimizerEngine {
             state.carbRatio.calculatedAllDay = step(state.carbRatio.calculatedAllDay, toward: target, start: state.carbRatio.startAllDay)
         }
 
-        let overallSamples = estimateSamples(window.map { $0.sensitivityAllDay }, minimumCount: 1)
-        let overallSensitivity = TherapyOptimizerMath.weightedMedian(overallSamples)
-        state.sensitivityByGlucoseReference = overallSensitivity.map { TherapyOptimizerGlucoseRangeSensitivity(sensitivity: $0, factor: 1, dataDays: overallSamples.count) }
-        state.sensitivityByGlucose = (0..<glucoseRangeCount).map { (range: Int) -> TherapyOptimizerGlucoseRangeSensitivity in
-            let samples = estimateSamples(window.compactMap { $0.sensitivityByGlucose?[range] }, minimumCount: glucoseRangeMinimumDaily)
-            let sensitivity = TherapyOptimizerMath.weightedMedian(samples)
-            let factor = sensitivity.flatMap { value in overallSensitivity.map { value / $0 } }
-            return TherapyOptimizerGlucoseRangeSensitivity(sensitivity: sensitivity, factor: factor, dataDays: samples.count)
-        }
-
         state.lastDailyUpdate = day
     }
 
@@ -766,8 +699,6 @@ enum TherapyOptimizerEngine {
         state.sensitivity.resetCalculated()
         state.carbRatio.resetCalculated()
         state.lastDailyUpdate = nil
-        state.sensitivityByGlucose = nil
-        state.sensitivityByGlucoseReference = nil
         state.resetIntervalContext()
 
         let calendar = state.calendar
@@ -812,39 +743,6 @@ enum TherapyOptimizerEngine {
             }
         }
         state.overrideIntervals.removeAll { $0.end < now.addingTimeInterval(-8 * 24 * 3600) }
-    }
-
-    // MARK: - Glucose-dependent factor
-
-    /// Factor for the insulin sensitivity at `glucose`: interpolated between range centres, each range shrunk toward 1
-    /// by its days of data. nil below 70 mg/dL, with too few days of data or when the latest day started over 3 days ago.
-    static func dosingSensitivityFactor(forGlucose glucose: Double, in state: TherapyOptimizerState, now: Date) -> Double? {
-        guard glucose >= hypoThreshold,
-              let reference = state.sensitivityByGlucoseReference, reference.dataDays >= reliableHourDataDays,
-              let ranges = state.sensitivityByGlucose,
-              let latestDay = state.summaries.last?.day,
-              now.timeIntervalSince(latestDay) <= dosingSensitivityMaximumAge else {
-            return nil
-        }
-        let factors = glucoseRangeCentres.indices.map { (centre: Int) -> Double in
-            let range = centre + 1
-            guard range < ranges.count, let factor = ranges[range].factor else { return 1 }
-            let days = Double(ranges[range].dataDays)
-            return 1 + (factor - 1) * days / (days + dosingSensitivityShrinkageDays)
-        }
-        let centres = glucoseRangeCentres
-        let factor: Double
-        if let upper = centres.firstIndex(where: { glucose < $0 }) {
-            if upper == 0 {
-                factor = factors[0]
-            } else {
-                let fraction = (glucose - centres[upper - 1]) / (centres[upper] - centres[upper - 1])
-                factor = factors[upper - 1] + (factors[upper] - factors[upper - 1]) * fraction
-            }
-        } else {
-            factor = factors[factors.count - 1]
-        }
-        return min(max(factor, dosingSensitivityFactorRange.lowerBound), dosingSensitivityFactorRange.upperBound)
     }
 }
 

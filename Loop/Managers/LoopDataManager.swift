@@ -56,8 +56,12 @@ final class LoopDataManager {
 
     private let automaticDosingStatus: AutomaticDosingStatus
 
-    /// Factor for "Use for Corrections" at a glucose (mg/dL) and date; nil means standard dosing.
-    private let glucoseDependentSensitivityFactor: (_ glucose: Double, _ date: Date) -> Double?
+    private let dynamicISFSettings: () -> DynamicISFSettings
+
+    private let dynamicISFDailyTotals: DynamicISFDailyTotalsStore
+
+    /// Replaces the TDD calculated from dose history, for tests.
+    private let dynamicISFTotalDailyDose: ((Date) -> DynamicISFTotalDailyDose?)?
 
     lazy private var cancellables = Set<AnyCancellable>()
 
@@ -96,10 +100,14 @@ final class LoopDataManager {
         pumpInsulinType: InsulinType?,
         automaticDosingStatus: AutomaticDosingStatus,
         trustedTimeOffset: @escaping () -> TimeInterval,
-        glucoseDependentSensitivityFactor: @escaping (_ glucose: Double, _ date: Date) -> Double? = GlucoseDependentSensitivity.activeFactor
+        dynamicISFSettings: @escaping () -> DynamicISFSettings = { UserDefaults.standard.dynamicISFSettings },
+        dynamicISFDailyTotals: DynamicISFDailyTotalsStore = DynamicISFDailyTotalsStore(),
+        dynamicISFTotalDailyDose: ((Date) -> DynamicISFTotalDailyDose?)? = nil
     ) {
         self.analyticsServicesManager = analyticsServicesManager
-        self.glucoseDependentSensitivityFactor = glucoseDependentSensitivityFactor
+        self.dynamicISFSettings = dynamicISFSettings
+        self.dynamicISFDailyTotals = dynamicISFDailyTotals
+        self.dynamicISFTotalDailyDose = dynamicISFTotalDailyDose
         self.lockedLastLoopCompleted = Locked(lastLoopCompleted)
         self.lockedBasalDeliveryState = Locked(basalDeliveryState)
         self.lockedSettings = Locked(settings)
@@ -466,6 +474,21 @@ final class LoopDataManager {
     // Confined to dataAccessQueue
     private var lastIntegralRetrospectiveCorrectionEnabled: Bool?
     private var cachedRetrospectiveCorrection: RetrospectiveCorrection?
+
+    /// What the Dynamic ISF context was built from; any change rebuilds it. Override and ISF changes clear the insulin effects,
+    /// which rebuilds it too (the override-adjusted schedule itself shifts with time).
+    private struct DynamicISFInputs: Equatable {
+        var configuration: DynamicISFConfiguration
+        var latestGlucoseDate: Date
+        var correctionRange: GlucoseRangeSchedule
+        var dailyTotals: [DynamicISFDailyTotal]
+    }
+
+    // Confined to dataAccessQueue; nil while Dynamic ISF is inactive.
+    private var dynamicISFContext: DynamicISFContext?
+    private var dynamicISFInputs: DynamicISFInputs?
+    private var lastActiveDynamicISFConfiguration: DynamicISFConfiguration?
+    private var lastDynamicISFDailyTotalsAttempt: Date?
 
     var retrospectiveCorrection: RetrospectiveCorrection {
         let currentIntegralRetrospectiveCorrectionEnabled = UserDefaults.standard.integralRetrospectiveCorrectionEnabled
@@ -1029,7 +1052,7 @@ extension LoopDataManager {
         var input = InsulinEffectMonitorInput(
             now: date,
             state: LoopStateView(loopDataManager: self, updateError: nil),
-            insulinSensitivity: insulinSensitivityScheduleApplyingOverrideHistory,
+            insulinSensitivity: insulinSensitivityScheduleApplyingOverrideHistory.map { dosingInsulinSensitivity($0, glucose: nil).schedule },
             carbRatio: carbRatioScheduleApplyingOverrideHistory,
             unitsPerPumpUnit: InsulinConcentrationHistory.current.unitsPerPumpUnit
         )
@@ -1045,6 +1068,198 @@ extension LoopDataManager {
 
         let assessment = InsulinEffectMonitor.assess(input, settings: UserDefaults.standard.insulinEffectMonitorSettings)
         lockedInsulinEffectAssessment.mutate { $0 = InsulinEffectMonitor.persisting(assessment, after: $0) }
+    }
+
+    /// Rebuilds the Dynamic ISF context when its inputs or the doses changed and resets the effects calculated with the old one.
+    private func updateDynamicISFContext(latestGlucoseDate: Date, logging: Bool) {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        let date = now()
+        let dynamicSettings = dynamicISFSettings()
+        let configuration = DynamicISFConfiguration(
+            settings: dynamicSettings,
+            integralRetrospectiveCorrectionEnabled: UserDefaults.standard.integralRetrospectiveCorrectionEnabled,
+            insulinType: pumpInsulinType
+        )
+        let logging = logging && dynamicSettings.isEnabled
+
+        guard configuration.inactiveReason == nil,
+              let divisor = DynamicISFCalculator.insulinDivisor(for: configuration.insulinType),
+              let sensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
+              let scheduledSensitivity = settings.insulinSensitivitySchedule,
+              let correctionRange = settings.effectiveGlucoseTargetRangeSchedule() else {
+            if lastActiveDynamicISFConfiguration != nil {
+                resetEffectsForDynamicISF(configurationChanged: true)
+            }
+            lastActiveDynamicISFConfiguration = nil
+            dynamicISFInputs = nil
+            setDynamicISFContext(nil)
+            publishDynamicISFStatus(at: date, inactiveReason: configuration.inactiveReason ?? .missingTherapySettings, logging: logging)
+            return
+        }
+
+        updateDynamicISFDailyTotalsIfNeeded(at: date)
+
+        let inputs = DynamicISFInputs(
+            configuration: configuration,
+            latestGlucoseDate: latestGlucoseDate,
+            correctionRange: correctionRange,
+            dailyTotals: dynamicISFDailyTotals.totals
+        )
+        // Dose changes clear the insulin effects, so the context's dose history is current while they are cached.
+        guard dynamicISFContext == nil || inputs != dynamicISFInputs || insulinEffect == nil || insulinEffectIncludingPendingInsulin == nil else {
+            publishDynamicISFStatus(at: date, inactiveReason: nil, logging: logging)
+            return
+        }
+
+        let doseStart = date.addingTimeInterval(-DynamicISFContext.doseHistoryDuration)
+        var doses: [DoseEntry]?
+        var glucose: [(date: Date, value: Double)] = []
+        let group = DispatchGroup()
+        group.enter()
+        doseStore.getNormalizedDoseEntries(start: doseStart, end: nil) { result in
+            switch result {
+            case .failure(let error):
+                self.logger.error("Dynamic ISF: could not fetch doses: %{public}@", String(describing: error))
+            case .success(let entries):
+                doses = entries
+            }
+            group.leave()
+        }
+        group.enter()
+        glucoseStore.getGlucoseSamples(start: date.addingTimeInterval(-DynamicISFContext.glucoseHistoryDuration), end: nil) { result in
+            switch result {
+            case .failure(let error):
+                self.logger.error("Dynamic ISF: could not fetch glucose: %{public}@", String(describing: error))
+            case .success(let samples):
+                glucose = samples
+                    .map { (date: $0.startDate, value: $0.quantity.doubleValue(for: .milligramsPerDeciliter)) }
+                    .sorted { $0.date < $1.date }
+            }
+            group.leave()
+        }
+        _ = group.wait(timeout: .distantFuture)
+
+        if inputs != dynamicISFInputs {
+            resetEffectsForDynamicISF(configurationChanged: configuration != lastActiveDynamicISFConfiguration)
+        }
+        lastActiveDynamicISFConfiguration = configuration
+        dynamicISFInputs = inputs
+
+        guard let fetchedDoses = doses else {
+            setDynamicISFContext(nil)
+            publishDynamicISFStatus(at: date, inactiveReason: .missingTotalDailyDose, logging: logging)
+            return
+        }
+
+        let history = DynamicISFInsulinHistory(doses: fetchedDoses, fetchStart: doseStart)
+        let dailyTotals = inputs.dailyTotals
+        let unitsPerPumpUnit = InsulinConcentrationHistory.current.unitsPerPumpUnit
+        let totalDailyDose: (Date) -> DynamicISFTotalDailyDose? = dynamicISFTotalDailyDose ?? { date in
+            DynamicISFDailyTotalsStore.totalDailyDose(at: date, history: history, dailyTotals: dailyTotals, unitsPerPumpUnit: unitsPerPumpUnit, weight: dynamicSettings.tddWeight, calendar: .current)
+        }
+        setDynamicISFContext(DynamicISFContext(
+            referenceDate: date,
+            settings: dynamicSettings,
+            divisor: divisor,
+            history: history,
+            glucose: glucose,
+            sensitivitySchedule: sensitivity,
+            scheduledSensitivitySchedule: scheduledSensitivity,
+            correctionRange: correctionRange,
+            totalDailyDose: totalDailyDose
+        ))
+        publishDynamicISFStatus(at: date, inactiveReason: nil, logging: logging)
+    }
+
+    private func setDynamicISFContext(_ context: DynamicISFContext?) {
+        dynamicISFContext = context
+        if let context {
+            carbStore.insulinSensitivityAtEntryStart = { context.carbEntrySensitivity(at: $0) }
+        } else {
+            carbStore.insulinSensitivityAtEntryStart = nil
+        }
+    }
+
+    /// The insulin counteraction effects are appended incrementally, so a new insulin sensitivity source needs them from scratch.
+    private func resetEffectsForDynamicISF(configurationChanged: Bool) {
+        if configurationChanged {
+            insulinCounteractionEffects = []
+        }
+        clearCachedInsulinEffects()
+        carbEffect = nil
+        carbsOnBoard = nil
+    }
+
+    /// Stores the daily totals of the past days once a day, after 01:00 so late doses of yesterday are in the dose store.
+    private func updateDynamicISFDailyTotalsIfNeeded(at date: Date) {
+        let calendar = Calendar.current
+        guard dynamicISFDailyTotals.needsUpdate(now: date, calendar: calendar),
+              calendar.component(.hour, from: date) >= 1,
+              !(lastDynamicISFDailyTotalsAttempt.map { calendar.isDate($0, inSameDayAs: date) } ?? false),
+              let start = calendar.date(byAdding: .day, value: -DynamicISFDailyTotalsStore.retainedDays, to: calendar.startOfDay(for: date)) else {
+            return
+        }
+        lastDynamicISFDailyTotalsAttempt = date
+
+        let group = DispatchGroup()
+        group.enter()
+        doseStore.getNormalizedDoseEntries(start: start, end: nil) { result in
+            switch result {
+            case .failure(let error):
+                self.logger.error("Dynamic ISF: could not fetch doses for daily totals: %{public}@", String(describing: error))
+            case .success(let doses):
+                let history = DynamicISFInsulinHistory(doses: doses, fetchStart: start)
+                let totals = history.dailyTotals(before: date, unitsPerPumpUnit: InsulinConcentrationHistory.current.unitsPerPumpUnit, calendar: calendar)
+                self.dynamicISFDailyTotals.store(totals, now: date, calendar: calendar)
+            }
+            group.leave()
+        }
+        _ = group.wait(timeout: .distantFuture)
+    }
+
+    private func publishDynamicISFStatus(at date: Date, inactiveReason: DynamicISFInactiveReason?, logging: Bool) {
+        var status = DynamicISFStatus(date: date, inactiveReason: inactiveReason, insulinType: pumpInsulinType)
+        if let context = dynamicISFContext {
+            status.glucose = context.latestGlucose(at: date)
+            status.totalDailyDose = context.totalDailyDose(date)
+            status.value = context.value(at: date)
+            if status.value == nil {
+                status.inactiveReason = status.glucose == nil ? .missingGlucose : .missingTotalDailyDose
+            }
+        }
+        DynamicISFState.shared.publish(status)
+
+        guard logging else {
+            return
+        }
+        if let context = dynamicISFContext, let value = status.value, let totalDailyDose = status.totalDailyDose, let glucose = status.glucose {
+            // DiagnosticLog passes at most 5 arguments to os_log.
+            let message = String(format: "%.1f (profile %.1f) mg/dL/U, %@ ratio %.2f (unlimited %.2f), BG %.0f (target %.0f) mg/dL, TDD 24 h %.2f, weighted %.2f, average %.2f",
+                                 value.sensitivity, value.profileSensitivity, String(describing: context.settings.formula), value.ratio, value.unlimitedRatio,
+                                 glucose, context.correctionTarget(at: date),
+                                 totalDailyDose.lastDay, totalDailyDose.weighted, totalDailyDose.average)
+            logger.default("Dynamic ISF %{public}@", message)
+        } else {
+            logger.default("Dynamic ISF inactive: %{public}@", status.inactiveReason.map { String(describing: $0) } ?? "unknown")
+        }
+    }
+
+    /// For doses starting now: the Dynamic ISF at `glucose` (else the latest CGM value) as a constant schedule, or `profile`.
+    private func dosingInsulinSensitivity(_ profile: InsulinSensitivitySchedule, glucose: HKQuantity?) -> (schedule: InsulinSensitivitySchedule, value: DynamicISFValue?) {
+        guard let dosing = dynamicISFContext?.dosingSchedule(profile, at: now(), glucose: glucose?.doubleValue(for: .milligramsPerDeciliter)) else {
+            return (profile, nil)
+        }
+        return (dosing.schedule, dosing.value)
+    }
+
+    /// Like `DoseStore.getGlucoseEffects`, with each dose's Dynamic ISF while it is active.
+    private func getInsulinEffects(start: Date, basalDosingEnd: Date?, completion: @escaping (DoseStoreResult<[GlucoseEffect]>) -> Void) {
+        guard let context = dynamicISFContext else {
+            doseStore.getGlucoseEffects(start: start, end: nil, basalDosingEnd: basalDosingEnd, completion: completion)
+            return
+        }
+        completion(.success(context.insulinEffects(start: start, basalDosingEnd: basalDosingEnd, insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration)))
     }
 
     fileprivate func update(for reason: UpdateReason, enactingAutomaticDose: Bool = true) -> (StoredDosingDecision, LoopError?) {
@@ -1096,6 +1311,8 @@ extension LoopDataManager {
             return (dosingDecision, .missingDataError(.glucose))
         }
 
+        updateDynamicISFContext(latestGlucoseDate: lastGlucoseDate, logging: reason == .loop)
+
         let retrospectiveStart = lastGlucoseDate.addingTimeInterval(-type(of: retrospectiveCorrection).retrospectionInterval)
 
         let earliestEffectDate = Date(timeInterval: .hours(-24), since: now())
@@ -1120,7 +1337,7 @@ extension LoopDataManager {
         if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
             self.logger.debug("Recomputing insulin effects")
             updateGroup.enter()
-            doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: now()) { (result) -> Void in
+            getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: now()) { (result) -> Void in
                 switch result {
                 case .failure(let error):
                     self.logger.error("Could not fetch insulin effects: %{public}@", error.localizedDescription)
@@ -1136,7 +1353,7 @@ extension LoopDataManager {
 
         if insulinEffectIncludingPendingInsulin == nil {
             updateGroup.enter()
-            doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: nil) { (result) -> Void in
+            getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: nil) { (result) -> Void in
                 switch result {
                 case .failure(let error):
                     self.logger.error("Could not fetch insulin effects including pending insulin: %{public}@", error.localizedDescription)
@@ -1416,7 +1633,7 @@ extension LoopDataManager {
                 let earliestEffectDate = Date(timeInterval: .hours(-24), since: now())
                 let nextEffectDate = insulinCounteractionEffects.last?.endDate ?? earliestEffectDate
                 let bolusEffect = [potentialBolus]
-                    .glucoseEffects(insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration, insulinSensitivity: sensitivity)
+                    .glucoseEffects(insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration, insulinSensitivity: dosingInsulinSensitivity(sensitivity, glucose: glucose.quantity).schedule)
                     .filterDateRange(nextEffectDate, nil)
                 effects.append(bolusEffect)
             }
@@ -1474,7 +1691,7 @@ extension LoopDataManager {
         var insulinEffect: [GlucoseEffect]?
         let basalDosingEnd = includingPendingInsulin ? nil : now()
         updateGroup.enter()
-        doseStore.getGlucoseEffects(start: insulinEffectStartDate, end: nil, basalDosingEnd: basalDosingEnd) { result in
+        getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: basalDosingEnd) { result in
             switch result {
             case .failure(let error):
                 effectCalculationError.mutate { $0 = error }
@@ -1639,6 +1856,7 @@ extension LoopDataManager {
             // Don't recommend changes if a bolus was just requested.
             // Sending additional pump commands is not going to be
             // successful in any case.
+            DynamicISFState.shared.publishBolusValue(nil)
             return nil
         }
 
@@ -1647,42 +1865,19 @@ extension LoopDataManager {
         }
         
         let model = doseStore.insulinModelProvider.model(for: pumpInsulinType)
-        let date = now()
+        let dosingSensitivity = dosingInsulinSensitivity(insulinSensitivity, glucose: predictedGlucose.first?.quantity)
+        DynamicISFState.shared.publishBolusValue(dosingSensitivity.value)
 
-        let recommend = { (sensitivity: InsulinSensitivitySchedule) in
-            predictedGlucose.recommendedManualBolus(
-                to: glucoseTargetRange,
-                at: date,
-                suspendThreshold: self.settings.suspendThreshold?.quantity,
-                sensitivity: sensitivity,
-                model: model,
-                pendingInsulin: 0, // Pending insulin is already reflected in the prediction
-                maxBolus: maxBolus,
-                volumeRounder: volumeRounder
-            )
-        }
-
-        let standard = recommend(insulinSensitivity)
-        guard let correction = glucoseDependentCorrection(sensitivity: insulinSensitivity, correctionRange: glucoseTargetRange, glucose: predictedGlucose.first, at: date) else {
-            return standard
-        }
-        return GlucoseDependentSensitivity.limitedManualBolus(standard: standard, scaled: recommend(correction.sensitivity), cap: correction.cap, volumeRounder: volumeRounder)
-    }
-
-    /// Scaled sensitivity and the most it may change a dose (units), when "Use for Corrections" applies.
-    private func glucoseDependentCorrection<Sample: GlucoseValue>(sensitivity: InsulinSensitivitySchedule, correctionRange: GlucoseRangeSchedule, glucose: Sample?, at date: Date) -> (sensitivity: InsulinSensitivitySchedule, cap: Double)? {
-        guard let glucose = glucose else { return nil }
-        let glucoseValue = glucose.quantity.doubleValue(for: .milligramsPerDeciliter)
-        guard let factor = glucoseDependentSensitivityFactor(glucoseValue, date) else { return nil }
-        let cap = GlucoseDependentSensitivity.cap(
-            glucose: glucoseValue,
-            correctionRangeMidpoint: correctionRange.quantityRange(at: date).averageValue(for: .milligramsPerDeciliter),
-            sensitivity: sensitivity.quantity(at: date).doubleValue(for: .milligramsPerDeciliter),
-            factor: factor
+        return predictedGlucose.recommendedManualBolus(
+            to: glucoseTargetRange,
+            at: now(),
+            suspendThreshold: settings.suspendThreshold?.quantity,
+            sensitivity: dosingSensitivity.schedule,
+            model: model,
+            pendingInsulin: 0, // Pending insulin is already reflected in the prediction
+            maxBolus: maxBolus,
+            volumeRounder: volumeRounder
         )
-        guard cap > 0, let scaled = GlucoseDependentSensitivity.scaled(sensitivity, by: factor) else { return nil }
-        logger.default("Glucose-dependent insulin sensitivity factor %.2f at %{public}@, dose change limited to %.2f U", factor, glucose.quantity.description, cap)
-        return (scaled, cap)
     }
 
     /// Generates a correction effect based on how large the discrepancy is between the current glucose and its model predicted value.
@@ -1794,7 +1989,7 @@ extension LoopDataManager {
         }
         
         // Calculate predicted glucose effect of suspending insulin delivery
-        suspendInsulinDeliveryEffect = suspendDoses.glucoseEffects(insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration, insulinSensitivity: insulinSensitivity).filterDateRange(startSuspend, endSuspend)
+        suspendInsulinDeliveryEffect = suspendDoses.glucoseEffects(insulinModelProvider: doseStore.insulinModelProvider, longestEffectDuration: doseStore.longestEffectDuration, insulinSensitivity: dosingInsulinSensitivity(insulinSensitivity, glucose: nil).schedule).filterDateRange(startSuspend, endSuspend)
     }
 
     /// Runs the glucose prediction on the latest effect data.
@@ -1934,14 +2129,11 @@ extension LoopDataManager {
             }
 
             let dosingRecommendation: AutomaticDoseRecommendation?
+            let dosingSensitivity = dosingInsulinSensitivity(insulinSensitivity!, glucose: predictedGlucose.first?.quantity).schedule
 
             // automaticDosingIOBLimit calculated from the user entered maxBolus
             let automaticDosingIOBLimit = maxBolus! * 2.0
             let iobHeadroom = automaticDosingIOBLimit - self.insulinOnBoard!.value
-
-            let doseDate = predictedGlucose[0].startDate
-            let scheduledBasalRate = basalRateSchedule!.value(at: doseDate)
-            let correction = glucoseDependentCorrection(sensitivity: insulinSensitivity!, correctionRange: glucoseTargetRange!, glucose: predictedGlucose.first, at: doseDate)
 
             switch settings.automaticDosingStrategy {
             case .automaticBolus:
@@ -1967,66 +2159,35 @@ extension LoopDataManager {
                 // If a user customizes maxPartialApplicationFactor > 1; this respects maxBolus
                 let maxAutomaticBolus = min(iobHeadroom, maxBolus! * min(effectiveBolusApplicationFactor, 1.0))
 
-                let recommend = { (sensitivity: InsulinSensitivitySchedule) in
-                    predictedGlucose.recommendedAutomaticDose(
-                        to: glucoseTargetRange!,
-                        at: doseDate,
-                        suspendThreshold: self.settings.suspendThreshold?.quantity,
-                        sensitivity: sensitivity,
-                        model: self.doseStore.insulinModelProvider.model(for: self.pumpInsulinType),
-                        basalRates: basalRateSchedule!,
-                        maxAutomaticBolus: maxAutomaticBolus,
-                        partialApplicationFactor: effectiveBolusApplicationFactor * self.timeBasedDoseApplicationFactor,
-                        lastTempBasal: lastTempBasal,
-                        volumeRounder: volumeRounder,
-                        rateRounder: rateRounder,
-                        isBasalRateScheduleOverrideActive: self.settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
-                    )
-                }
-                let standard = recommend(insulinSensitivity!)
-                if let correction = correction {
-                    dosingRecommendation = GlucoseDependentSensitivity.limitedAutomaticDose(
-                        standard: standard,
-                        scaled: recommend(correction.sensitivity),
-                        cap: correction.cap,
-                        scheduledBasalRate: scheduledBasalRate,
-                        lastTempBasal: lastTempBasal,
-                        at: doseDate,
-                        volumeRounder: volumeRounder,
-                        rateRounder: rateRounder
-                    )
-                } else {
-                    dosingRecommendation = standard
-                }
+                dosingRecommendation = predictedGlucose.recommendedAutomaticDose(
+                    to: glucoseTargetRange!,
+                    at: predictedGlucose[0].startDate,
+                    suspendThreshold: settings.suspendThreshold?.quantity,
+                    sensitivity: dosingSensitivity,
+                    model: doseStore.insulinModelProvider.model(for: pumpInsulinType),
+                    basalRates: basalRateSchedule!,
+                    maxAutomaticBolus: maxAutomaticBolus,
+                    partialApplicationFactor: effectiveBolusApplicationFactor * self.timeBasedDoseApplicationFactor,
+                    lastTempBasal: lastTempBasal,
+                    volumeRounder: volumeRounder,
+                    rateRounder: rateRounder,
+                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                )
             case .tempBasalOnly:
 
-                let recommend = { (sensitivity: InsulinSensitivitySchedule) in
-                    predictedGlucose.recommendedTempBasal(
-                        to: glucoseTargetRange!,
-                        at: doseDate,
-                        suspendThreshold: self.settings.suspendThreshold?.quantity,
-                        sensitivity: sensitivity,
-                        model: self.doseStore.insulinModelProvider.model(for: self.pumpInsulinType),
-                        basalRates: basalRateSchedule!,
-                        maxBasalRate: maxBasal!,
-                        additionalActiveInsulinClamp: iobHeadroom,
-                        lastTempBasal: lastTempBasal,
-                        rateRounder: rateRounder,
-                        isBasalRateScheduleOverrideActive: self.settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
-                    )
-                }
-                var temp = recommend(insulinSensitivity!)
-                if let correction = correction {
-                    temp = GlucoseDependentSensitivity.limitedTempBasal(
-                        standard: temp,
-                        scaled: recommend(correction.sensitivity),
-                        cap: correction.cap,
-                        scheduledBasalRate: scheduledBasalRate,
-                        lastTempBasal: lastTempBasal,
-                        at: doseDate,
-                        rateRounder: rateRounder
-                    )
-                }
+                let temp = predictedGlucose.recommendedTempBasal(
+                    to: glucoseTargetRange!,
+                    at: predictedGlucose[0].startDate,
+                    suspendThreshold: settings.suspendThreshold?.quantity,
+                    sensitivity: dosingSensitivity,
+                    model: doseStore.insulinModelProvider.model(for: pumpInsulinType),
+                    basalRates: basalRateSchedule!,
+                    maxBasalRate: maxBasal!,
+                    additionalActiveInsulinClamp: iobHeadroom,
+                    lastTempBasal: lastTempBasal,
+                    rateRounder: rateRounder,
+                    isBasalRateScheduleOverrideActive: settings.scheduleOverride?.isBasalRateScheduleOverriden(at: startDate) == true
+                )
                 dosingRecommendation = AutomaticDoseRecommendation(basalAdjustment: temp)
             }
 
@@ -2498,92 +2659,6 @@ enum AutomaticDoseUrgency: Equatable {
         } else {
             self = .canWait
         }
-    }
-}
-
-/// "Use for Corrections": dose changes limited to the factor's share of correcting glucose to the range midpoint.
-enum GlucoseDependentSensitivity {
-    /// Temp basal deviations are compared in units delivered over this time.
-    static let tempBasalDuration: TimeInterval = .minutes(30)
-
-    /// The active profile's factor at `glucose` (mg/dL); nil while its "Use for Corrections" is off.
-    static func activeFactor(forGlucose glucose: Double, at date: Date) -> Double? {
-        guard TherapyProfile.activeProfile()?.usesGlucoseDependentSensitivity == true,
-              let factor = TherapyOptimizer.shared.dosingSensitivityFactor(forGlucose: glucose, now: date),
-              abs(factor - 1) > 0.005 else {
-            return nil
-        }
-        return factor
-    }
-
-    static func cap(glucose: Double, correctionRangeMidpoint: Double, sensitivity: Double, factor: Double) -> Double {
-        guard sensitivity > 0, factor > 0 else { return 0 }
-        return max(0, glucose - correctionRangeMidpoint) / sensitivity * abs(1 / factor - 1)
-    }
-
-    static func scaled(_ schedule: InsulinSensitivitySchedule, by factor: Double) -> InsulinSensitivitySchedule? {
-        InsulinSensitivitySchedule(
-            unit: schedule.unit,
-            dailyItems: schedule.items.map { RepeatingScheduleValue(startTime: $0.startTime, value: $0.value * factor) },
-            timeZone: schedule.timeZone
-        )
-    }
-
-    static func limitedBolus(standard: Double, scaled: Double, cap: Double, volumeRounder: ((Double) -> Double)?) -> Double {
-        let deviation = scaled - standard
-        guard abs(deviation) > cap else { return scaled }
-        let limited = standard + (deviation > 0 ? cap : -cap)
-        return volumeRounder?(limited) ?? limited
-    }
-
-    static func limitedManualBolus(standard: ManualBolusRecommendation, scaled: ManualBolusRecommendation, cap: Double, volumeRounder: ((Double) -> Double)?) -> ManualBolusRecommendation {
-        let amount = limitedBolus(standard: standard.amount, scaled: scaled.amount, cap: cap, volumeRounder: volumeRounder)
-        guard amount != scaled.amount else { return scaled }
-        return ManualBolusRecommendation(amount: amount, pendingInsulin: scaled.pendingInsulin, notice: scaled.notice)
-    }
-
-    /// Rate delivered after a recommendation: nil keeps the running temp basal, cancel returns to scheduled basal.
-    static func resultingRate(of recommendation: TempBasalRecommendation?, scheduledBasalRate: Double, lastTempBasal: DoseEntry?, at date: Date) -> Double {
-        guard let recommendation = recommendation else {
-            if let temp = lastTempBasal, temp.type == .tempBasal, temp.startDate <= date, temp.endDate > date {
-                return temp.unitsPerHour
-            }
-            return scheduledBasalRate
-        }
-        return recommendation.duration > 0 ? recommendation.unitsPerHour : scheduledBasalRate
-    }
-
-    static func limitedTempBasal(standard: TempBasalRecommendation?, scaled: TempBasalRecommendation?, cap: Double, scheduledBasalRate: Double, lastTempBasal: DoseEntry?, at date: Date, rateRounder: ((Double) -> Double)?) -> TempBasalRecommendation? {
-        let standardRate = resultingRate(of: standard, scheduledBasalRate: scheduledBasalRate, lastTempBasal: lastTempBasal, at: date)
-        let scaledRate = resultingRate(of: scaled, scheduledBasalRate: scheduledBasalRate, lastTempBasal: lastTempBasal, at: date)
-        let hours = tempBasalDuration.hours
-        let deviation = (scaledRate - standardRate) * hours
-        guard abs(deviation) > cap else { return scaled }
-        let limitedRate = standardRate + (deviation > 0 ? cap : -cap) / hours
-        let rate = rateRounder?(limitedRate) ?? limitedRate
-        guard abs(rate - standardRate) > .ulpOfOne else { return standard }
-        return TempBasalRecommendation(unitsPerHour: rate, duration: tempBasalDuration)
-    }
-
-    /// Bolus and temp basal deviations share one cap.
-    static func limitedAutomaticDose(standard: AutomaticDoseRecommendation?, scaled: AutomaticDoseRecommendation?, cap: Double, scheduledBasalRate: Double, lastTempBasal: DoseEntry?, at date: Date, volumeRounder: ((Double) -> Double)?, rateRounder: ((Double) -> Double)?) -> AutomaticDoseRecommendation? {
-        let standardBolus = standard?.bolusUnits ?? 0
-        let bolus = limitedBolus(standard: standardBolus, scaled: scaled?.bolusUnits ?? 0, cap: cap, volumeRounder: volumeRounder)
-        let remainingCap = max(0, cap - abs(bolus - standardBolus))
-        let temp = limitedTempBasal(
-            standard: standard?.basalAdjustment,
-            scaled: scaled?.basalAdjustment,
-            cap: remainingCap,
-            scheduledBasalRate: scheduledBasalRate,
-            lastTempBasal: lastTempBasal,
-            at: date,
-            rateRounder: rateRounder
-        )
-        if bolus == (scaled?.bolusUnits ?? 0), temp == scaled?.basalAdjustment {
-            return scaled
-        }
-        guard temp != nil || bolus > 0 else { return nil }
-        return AutomaticDoseRecommendation(basalAdjustment: temp, bolusUnits: bolus)
     }
 }
 

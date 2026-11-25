@@ -128,7 +128,8 @@ class LoopDataManagerTests: XCTestCase {
                maxBolus: Double = 10,
                maxBasalRate: Double = 5.0,
                dosingStrategy: AutomaticDosingStrategy = .tempBasalOnly,
-               glucoseDependentSensitivityFactor: ((Double, Date) -> Double?)? = nil)
+               dynamicISFSettings: DynamicISFSettings = DynamicISFSettings(),
+               dynamicISFTotalDailyDose: ((Date) -> DynamicISFTotalDailyDose?)? = nil)
     {
         let basalRateSchedule = loadBasalRateScheduleFixture("basal_profile")
         let insulinSensitivitySchedule = InsulinSensitivitySchedule(
@@ -189,7 +190,9 @@ class LoopDataManagerTests: XCTestCase {
             pumpInsulinType: .novolog,
             automaticDosingStatus: automaticDosingStatus,
             trustedTimeOffset: { 0 },
-            glucoseDependentSensitivityFactor: glucoseDependentSensitivityFactor ?? GlucoseDependentSensitivity.activeFactor
+            dynamicISFSettings: { dynamicISFSettings },
+            dynamicISFDailyTotals: DynamicISFDailyTotalsStore(defaults: nil),
+            dynamicISFTotalDailyDose: dynamicISFTotalDailyDose
         )
     }
     

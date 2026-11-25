@@ -186,6 +186,8 @@ struct BolusEntryView: View {
                 recommendedBolusRow
             }
 
+            dynamicISFRow
+
             bolusEntryRow
         }
     }
@@ -229,6 +231,28 @@ struct BolusEntryView: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var dynamicISFRow: some View {
+        if let value = viewModel.dynamicISF {
+            let formatter = QuantityFormatter(for: displayGlucosePreference.unit)
+            let format = { (sensitivity: Double) in
+                formatter.string(from: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: sensitivity), includeUnit: false) ?? ""
+            }
+            let dynamic = format(value.sensitivity)
+            let profile = format(value.profileSensitivity)
+            if dynamic != profile {
+                HStack {
+                    Text("Dynamic ISF", comment: "Label for the dynamic insulin sensitivity row on bolus screen")
+                    Spacer()
+                    Text(String(format: NSLocalizedString("%1$@ (profile %2$@) %3$@", comment: "Dynamic insulin sensitivity with the profile's value and the unit (1: dynamic, 2: profile, 3: unit)"),
+                                dynamic, profile, QuantityFormatter(for: displayGlucosePreference.unit.unitDivided(by: .internationalUnit())).localizedUnitStringWithPlurality()))
+                        .foregroundColor(Color(.secondaryLabel))
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     private func didBeginEditing() {

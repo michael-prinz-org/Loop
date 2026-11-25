@@ -117,6 +117,8 @@ final class BolusEntryViewModel: ObservableObject {
     var recommendedBolusAmount: Double? {
         recommendedBolus?.doubleValue(for: .internationalUnit())
     }
+    /// Dynamic ISF of the current recommendation; nil when it used the profile's insulin sensitivity.
+    @Published var dynamicISF: DynamicISFValue?
     @Published var enteredBolus = HKQuantity(unit: .internationalUnit(), doubleValue: 0)
     var enteredBolusAmount: Double {
         enteredBolus.doubleValue(for: .internationalUnit())
@@ -701,6 +703,8 @@ final class BolusEntryViewModel: ObservableObject {
         DispatchQueue.main.async {
             let priorRecommendedBolus = self.recommendedBolus
             self.recommendedBolus = recommendedBolus
+            // The recommendation published its value to the main queue before this block.
+            self.dynamicISF = recommendedBolus == nil ? nil : DynamicISFState.shared.bolusValue
             self.dosingDecision.manualBolusRecommendation = recommendation.map { ManualBolusRecommendationWithDate(recommendation: $0, date: now) }
             self.activeNotice = notice
 

@@ -181,7 +181,6 @@ final class TherapyOptimizer: ObservableObject {
             state.recentCounteraction = previous.recentCounteraction
             state.recentGlucoseChange = previous.recentGlucoseChange
             state.openSensitivityEpisode = previous.openSensitivityEpisode
-            state.openSensitivityEpisodesByGlucose = previous.openSensitivityEpisodesByGlucose
         } else {
             let start = backfillStart(for: state, now: now)
             state.lastProcessedDate = start
@@ -332,7 +331,7 @@ final class TherapyOptimizer: ObservableObject {
         var carbEntries: [(start: Date, grams: Double)] = []
         var storedCarbEntries: [StoredCarbEntry] = []
         group.enter()
-        carbStore.getCarbsOnBoardValues(start: lookbackStart, end: end, effectVelocities: counteraction) { result in
+        carbStore.getCarbsOnBoardValues(start: lookbackStart, end: end, effectVelocities: counteraction, usingScheduledInsulinSensitivity: true) { result in
             switch result {
             case .success(let values): carbsOnBoard = values
             case .failure(let error): failure.value = error
@@ -340,7 +339,8 @@ final class TherapyOptimizer: ObservableObject {
             group.leave()
         }
         group.enter()
-        carbStore.getCarbStatus(start: lookbackStart, end: end, effectVelocities: counteraction) { result in
+        // Profile insulin sensitivity like the insulin effects above, also while Dynamic ISF is on.
+        carbStore.getCarbStatus(start: lookbackStart, end: end, effectVelocities: counteraction, usingScheduledInsulinSensitivity: true) { result in
             switch result {
             case .success(let statuses):
                 carbEntries = statuses.map { (start: $0.startDate, grams: $0.quantity.doubleValue(for: .gram())) }
@@ -581,20 +581,9 @@ final class TherapyOptimizer: ObservableObject {
 
     private func publish() {
         let snapshot = workingState
-        dosingState.value = snapshot
         DispatchQueue.main.async {
             self.state = snapshot
         }
-    }
-
-    // MARK: - Dosing
-
-    /// Read from Loop's dosing queue, so kept apart from the main-thread `state`.
-    let dosingState = Locked<TherapyOptimizerState?>(nil)
-
-    /// Factor for the insulin sensitivity used in correction dosing at this glucose; nil without trustworthy data.
-    func dosingSensitivityFactor(forGlucose milligramsPerDeciliter: Double, now: Date = Date()) -> Double? {
-        dosingState.value.flatMap { TherapyOptimizerEngine.dosingSensitivityFactor(forGlucose: milligramsPerDeciliter, in: $0, now: now) }
     }
 
     private func publishError(_ message: String) {

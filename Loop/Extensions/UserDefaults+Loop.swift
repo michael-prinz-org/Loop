@@ -340,9 +340,7 @@ struct TherapyProfile: Codable, Identifiable, Equatable {
     var maximumBolus: Double?
     /// Insulin the values are meant for; nil means U100.
     var insulinConcentration: InsulinConcentration?
-    /// "Use for Corrections": while active, the glucose-dependent factor may change the correction share of doses.
-    var usesGlucoseDependentSensitivity: Bool?
 
-    /// Read on every dose calculation; the outer nil means not loaded since the profiles last changed.
+    /// Cached active profile; the outer nil means not loaded since the profiles last changed.
     static let activeProfileSnapshot = Locked<TherapyProfile??>(nil)
 }

@@ -79,7 +79,13 @@ class MockDoseStore: DoseStoreProtocol {
     }
     
     func getNormalizedDoseEntries(start: Date, end: Date?, completion: @escaping (DoseStoreResult<[DoseEntry]>) -> Void) {
-        completion(.failure(.configurationError))
+        guard let doseHistory else {
+            completion(.failure(.configurationError))
+            return
+        }
+        // Like DoseStore: annotated with the basal schedule.
+        let doses = doseHistory.filterDateRange(start, end)
+        completion(.success(basalProfileApplyingOverrideHistory.map { doses.annotated(with: $0) } ?? doses))
     }
     
     func executePumpEventQuery(fromQueryAnchor queryAnchor: DoseStore.QueryAnchor?, limit: Int, completion: @escaping (DoseStore.PumpEventQueryResult) -> Void) {

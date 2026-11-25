@@ -160,6 +160,9 @@
 		7E0D7A0229A1C0DE00000006 /* InsulinEffectViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000006 /* InsulinEffectViews.swift */; };
 		7E0D7A0229A1C0DE00000007 /* InsulinEffectMonitorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000007 /* InsulinEffectMonitorTests.swift */; };
 		7E0D7A0229A1C0DE00000008 /* TherapyProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000008 /* TherapyProfileTests.swift */; };
+		7E0D7A0229A1C0DE00000009 /* DynamicISF.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE00000009 /* DynamicISF.swift */; };
+		7E0D7A0229A1C0DE0000000A /* DynamicISFTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE0000000A /* DynamicISFTests.swift */; };
+		7E0D7A0229A1C0DE0000000B /* DynamicISFScenarioTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E0D7A0129A1C0DE0000000B /* DynamicISFScenarioTests.swift */; };
 		43A943761B926B7B0051FA24 /* Interface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 43A943741B926B7B0051FA24 /* Interface.storyboard */; };
 		43A9437F1B926B7B0051FA24 /* WatchApp Extension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 43A9437E1B926B7B0051FA24 /* WatchApp Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		43A943881B926B7B0051FA24 /* ExtensionDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A943871B926B7B0051FA24 /* ExtensionDelegate.swift */; };
@@ -908,6 +911,9 @@
 		7E0D7A0129A1C0DE00000006 /* InsulinEffectViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsulinEffectViews.swift; sourceTree = "<group>"; };
 		7E0D7A0129A1C0DE00000007 /* InsulinEffectMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsulinEffectMonitorTests.swift; sourceTree = "<group>"; };
 		7E0D7A0129A1C0DE00000008 /* TherapyProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TherapyProfileTests.swift; sourceTree = "<group>"; };
+		7E0D7A0129A1C0DE00000009 /* DynamicISF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DynamicISF.swift; sourceTree = "<group>"; };
+		7E0D7A0129A1C0DE0000000A /* DynamicISFTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DynamicISFTests.swift; sourceTree = "<group>"; };
+		7E0D7A0129A1C0DE0000000B /* DynamicISFScenarioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DynamicISFScenarioTests.swift; sourceTree = "<group>"; };
 		43A8EC6E210E622600A81379 /* CGMBLEKitUI.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; path = CGMBLEKitUI.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		43A943721B926B7B0051FA24 /* WatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		43A943751B926B7B0051FA24 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Interface.storyboard; sourceTree = "<group>"; };
@@ -1583,6 +1589,8 @@
 				7E0D7A0129A1C0DE00000004 /* TherapyOptimizerTests.swift */,
 				7E0D7A0129A1C0DE00000007 /* InsulinEffectMonitorTests.swift */,
 				7E0D7A0129A1C0DE00000008 /* TherapyProfileTests.swift */,
+				7E0D7A0129A1C0DE0000000A /* DynamicISFTests.swift */,
+				7E0D7A0129A1C0DE0000000B /* DynamicISFScenarioTests.swift */,
 				E950CA9029002D9000B5B692 /* LoopDataManagerDosingTests.swift */,
 				E9B3552C293592B40076AB04 /* MealDetectionManagerTests.swift */,
 				1D70C40026EC0F9D00C62570 /* SupportManagerTests.swift */,
@@ -2043,6 +2051,7 @@
 				7E0D7A0129A1C0DE00000001 /* TherapyOptimizer.swift */,
 				7E0D7A0129A1C0DE00000002 /* TherapyOptimizerDataCollector.swift */,
 				7E0D7A0129A1C0DE00000005 /* InsulinEffectMonitor.swift */,
+				7E0D7A0129A1C0DE00000009 /* DynamicISF.swift */,
 				43C094491CACCC73001F6403 /* NotificationManager.swift */,
 				A97F250725E056D500F0EE19 /* OnboardingManager.swift */,
 				432E73CA1D24B3D6009AD15D /* RemoteDataServicesManager.swift */,
@@ -3456,6 +3465,7 @@
 				7E0D7A0229A1C0DE00000003 /* CalculatedProfileView.swift in Sources */,
 				7E0D7A0229A1C0DE00000005 /* InsulinEffectMonitor.swift in Sources */,
 				7E0D7A0229A1C0DE00000006 /* InsulinEffectViews.swift in Sources */,
+				7E0D7A0229A1C0DE00000009 /* DynamicISF.swift in Sources */,
 				1DA649A9244126DA00F61E75 /* InAppModalAlertScheduler.swift in Sources */,
 				43B260491ED248FB008CAA77 /* CarbEntryTableViewCell.swift in Sources */,
 				142CB75B2A60BFC30075748A /* FavoriteFoodsView.swift in Sources */,
@@ -3784,6 +3794,8 @@
 				7E0D7A0229A1C0DE00000004 /* TherapyOptimizerTests.swift in Sources */,
 				7E0D7A0229A1C0DE00000007 /* InsulinEffectMonitorTests.swift in Sources */,
 				7E0D7A0229A1C0DE00000008 /* TherapyProfileTests.swift in Sources */,
+				7E0D7A0229A1C0DE0000000A /* DynamicISFTests.swift in Sources */,
+				7E0D7A0229A1C0DE0000000B /* DynamicISFScenarioTests.swift in Sources */,
 				E98A55F324EDD9530008715D /* MockSettingsStore.swift in Sources */,
 				C165756F2534C468004AE16E /* SimpleBolusViewModelTests.swift in Sources */,
 				A96DAC2A2838EF8A00D94E38 /* DiagnosticLogTests.swift in Sources */,

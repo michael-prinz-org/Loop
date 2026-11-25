@@ -47,6 +47,8 @@ class MockCarbStore: CarbStoreProtocol {
         ],
         timeZone: .utcTimeZone
     )!
+
+    var insulinSensitivityAtEntryStart: ((Date) -> HKQuantity?)?
     
     var maximumAbsorptionTimeInterval: TimeInterval {
         return defaultAbsorptionTimes.slow * 2
@@ -75,6 +77,10 @@ class MockCarbStore: CarbStoreProtocol {
     func getCarbStatus(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (CarbStoreResult<[CarbStatus<StoredCarbEntry>]>) -> Void) {
         completion(.failure(.notConfigured))
     }
+
+    func getCarbStatus(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, usingScheduledInsulinSensitivity: Bool, completion: @escaping (CarbStoreResult<[CarbStatus<StoredCarbEntry>]>) -> Void) {
+        completion(.failure(.notConfigured))
+    }
     
     func generateDiagnosticReport(_ completion: @escaping (String) -> Void) {
         completion("")
@@ -85,6 +91,10 @@ class MockCarbStore: CarbStoreProtocol {
     }
     
     func getCarbsOnBoardValues(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (CarbStoreResult<[CarbValue]>) -> Void) {
+        completion(.success([]))
+    }
+
+    func getCarbsOnBoardValues(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, usingScheduledInsulinSensitivity: Bool, completion: @escaping (CarbStoreResult<[CarbValue]>) -> Void) {
         completion(.success([]))
     }
     

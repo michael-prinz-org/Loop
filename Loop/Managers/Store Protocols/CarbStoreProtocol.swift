@@ -23,6 +23,8 @@ protocol CarbStoreProtocol: AnyObject {
     var insulinSensitivityScheduleApplyingOverrideHistory: InsulinSensitivitySchedule? { get }
     
     var carbRatioScheduleApplyingOverrideHistory: CarbRatioSchedule? { get }
+
+    var insulinSensitivityAtEntryStart: ((Date) -> HKQuantity?)? { get set }
     
     var maximumAbsorptionTimeInterval: TimeInterval { get }
     
@@ -36,6 +38,8 @@ protocol CarbStoreProtocol: AnyObject {
     func addCarbEntry(_ entry: NewCarbEntry, completion: @escaping (_ result: CarbStoreResult<StoredCarbEntry>) -> Void)
     
     func getCarbStatus(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (_ result: CarbStoreResult<[CarbStatus<StoredCarbEntry>]>) -> Void)
+
+    func getCarbStatus(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, usingScheduledInsulinSensitivity: Bool, completion: @escaping (_ result: CarbStoreResult<[CarbStatus<StoredCarbEntry>]>) -> Void)
     
     func generateDiagnosticReport(_ completion: @escaping (_ report: String) -> Void)
     
@@ -45,6 +49,8 @@ protocol CarbStoreProtocol: AnyObject {
     func glucoseEffects<Sample: CarbEntry>(of samples: [Sample], startingAt start: Date, endingAt end: Date?, effectVelocities: [GlucoseEffectVelocity]) throws -> [GlucoseEffect]
     
     func getCarbsOnBoardValues(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (_ result: CarbStoreResult<[CarbValue]>) -> Void)
+
+    func getCarbsOnBoardValues(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, usingScheduledInsulinSensitivity: Bool, completion: @escaping (_ result: CarbStoreResult<[CarbValue]>) -> Void)
     
     func carbsOnBoard(at date: Date, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (_ result: CarbStoreResult<CarbValue>) -> Void)
     
