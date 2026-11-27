@@ -128,15 +128,20 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
 
         // For now, do this every time
         _ = self.refreshContext.remove(.status)
+        let selectedInputs = self.selectedInputs
+        let dynamicISFSelection = self.dynamicISFSelection
+        var loopUsesDynamicISF = false
+        var preview: DynamicISFPreview?
         reloadGroup.enter()
         deviceManager.loopManager.getLoopState { (manager, state) in
             self.retrospectiveGlucoseDiscrepancies = state.retrospectiveGlucoseDiscrepancies
             totalRetrospectiveCorrection = state.totalRetrospectiveCorrection
             self.glucoseChart.setPredictedGlucoseValues(state.predictedGlucoseIncludingPendingInsulin ?? [])
 
+            loopUsesDynamicISF = manager.isDynamicISFActive
             do {
-                let glucose = try state.predictGlucose(using: self.selectedInputs, includingPendingInsulin: true)
-                self.glucoseChart.setAlternatePredictedGlucoseValues(glucose)
+                preview = try manager.predictGlucose(dynamicISFEnabled: dynamicISFSelection ?? loopUsesDynamicISF, using: selectedInputs, includingPendingInsulin: true)
+                self.glucoseChart.setAlternatePredictedGlucoseValues(preview?.prediction ?? [])
             } catch {
                 self.refreshContext.update(with: .status)
                 self.glucoseChart.setAlternatePredictedGlucoseValues([])
@@ -164,6 +169,8 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
             if let totalRetrospectiveCorrection = totalRetrospectiveCorrection {
                 self.totalRetrospectiveCorrection = totalRetrospectiveCorrection
             }
+            self.isDynamicISFActive = loopUsesDynamicISF
+            self.dynamicISFPreview = preview
 
             self.charts.prerender()
 
@@ -179,6 +186,7 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
                 case let cell as PredictionInputEffectTableViewCell:
                     if let indexPath = self.tableView.indexPath(for: cell) {
                         self.tableView(self.tableView, updateTextFor: cell, at: indexPath)
+                        self.tableView(self.tableView, updateDynamicISFFor: cell, at: indexPath)
                     }
                 default:
                     break
@@ -193,6 +201,7 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
     private enum Section: Int, CaseIterable {
         case charts
         case inputs
+        case dynamicISF
     }
 
     private var eventualGlucoseDescription: String?
@@ -200,6 +209,17 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
     private var availableInputs: [PredictionInputEffect] = [.carbs, .insulin, .momentum, .retrospection, .suspend]
 
     private var selectedInputs = PredictionInputEffect.all
+
+    /// nil follows the loop's Dynamic ISF; a value previews the prediction with Dynamic ISF switched on or off.
+    private var dynamicISFSelection: Bool?
+
+    private var isDynamicISFActive = false
+
+    private var dynamicISFPreview: DynamicISFPreview?
+
+    private var isDynamicISFSelected: Bool {
+        dynamicISFSelection ?? isDynamicISFActive
+    }
 
     override func numberOfSections(in tableView: UITableView) -> Int {
         return Section.allCases.count
@@ -211,6 +231,8 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
             return 1
         case .inputs:
             return availableInputs.count
+        case .dynamicISF:
+            return 1
         }
     }
 
@@ -234,6 +256,68 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
             let cell = tableView.dequeueReusableCell(withIdentifier: PredictionInputEffectTableViewCell.className, for: indexPath) as! PredictionInputEffectTableViewCell
             self.tableView(tableView, updateTextFor: cell, at: indexPath)
             return cell
+        case .dynamicISF:
+            let cell = tableView.dequeueReusableCell(withIdentifier: PredictionInputEffectTableViewCell.className, for: indexPath) as! PredictionInputEffectTableViewCell
+            self.tableView(tableView, updateDynamicISFFor: cell, at: indexPath)
+            return cell
+        }
+    }
+
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        guard case .dynamicISF? = Section(rawValue: section) else {
+            return nil
+        }
+        return NSLocalizedString("Shows the forecast with Dynamic ISF switched on or off, including its effect on carb absorption and retrospective correction. The gray dashed line stays the loop's forecast. Settings are not changed.", comment: "Footer of the Dynamic ISF preview on the predicted glucose screen")
+    }
+
+    private func tableView(_ tableView: UITableView, updateDynamicISFFor cell: PredictionInputEffectTableViewCell, at indexPath: IndexPath) {
+        guard case .dynamicISF? = Section(rawValue: indexPath.section) else {
+            return
+        }
+
+        cell.titleLabel?.text = NSLocalizedString("Dynamic ISF", comment: "Title of the Dynamic ISF preview on the predicted glucose screen")
+        cell.accessoryType = isDynamicISFSelected ? .checkmark : .none
+
+        var lines = [dynamicISFDescription]
+        if isDynamicISFSelected != isDynamicISFActive {
+            lines.append(NSLocalizedString("Preview only", comment: "Hint that the Dynamic ISF selection on the predicted glucose screen differs from the loop"))
+            if isDynamicISFSelected, UserDefaults.standard.integralRetrospectiveCorrectionEnabled {
+                lines.append(NSLocalizedString("Calculated with standard retrospective correction: switching Dynamic ISF on turns Integral Retrospective Correction off.", comment: "Hint on the predicted glucose screen when previewing Dynamic ISF while Integral Retrospective Correction is on"))
+            }
+        }
+        cell.subtitleLabel?.text = lines.joined(separator: "\n")
+    }
+
+    private var dynamicISFDescription: String {
+        guard isDynamicISFSelected else {
+            return NSLocalizedString("Profile insulin sensitivity", comment: "Dynamic ISF preview description when off")
+        }
+        guard let preview = dynamicISFPreview else {
+            return SettingsTableViewCell.NoValueString
+        }
+        if let value = preview.value {
+            let unit = glucoseChart.glucoseUnit
+            let formatter = QuantityFormatter(for: unit)
+            let format = { (sensitivity: Double) in
+                formatter.string(from: HKQuantity(unit: .milligramsPerDeciliter, doubleValue: sensitivity), includeUnit: false) ?? "?"
+            }
+            let unitString = QuantityFormatter(for: unit.unitDivided(by: .internationalUnit())).localizedUnitStringWithPlurality()
+            return String(format: NSLocalizedString("ISF now %1$@ (profile %2$@) %3$@, ratio %4$@", comment: "Dynamic ISF preview description (1: dynamic ISF, 2: profile ISF, 3: unit, 4: ratio)"),
+                          format(value.sensitivity), format(value.profileSensitivity), unitString, String(format: "%.2f", locale: .current, value.ratio))
+        }
+        switch preview.inactiveReason {
+        case .unsupportedInsulin?:
+            return NSLocalizedString("Not available for the pump's insulin", comment: "Dynamic ISF preview description for an unsupported insulin")
+        case .invalidRatioLimits?:
+            return NSLocalizedString("Minimum ratio must be below the maximum", comment: "Dynamic insulin sensitivity status with invalid limits")
+        case .missingTherapySettings?:
+            return NSLocalizedString("Insulin sensitivity or correction range missing", comment: "Dynamic insulin sensitivity status without therapy settings")
+        case .missingTotalDailyDose?:
+            return NSLocalizedString("No complete insulin data for the last 24 hours; using the profile", comment: "Dynamic insulin sensitivity status without total daily dose")
+        case .missingGlucose?:
+            return NSLocalizedString("No glucose in the last 15 minutes; using the profile", comment: "Dynamic insulin sensitivity status without recent glucose")
+        case .disabled?, .integralRetrospectiveCorrection?, nil:
+            return NSLocalizedString("Profile insulin sensitivity", comment: "Dynamic ISF preview description when off")
         }
     }
 
@@ -306,22 +390,30 @@ class PredictionTableViewController: LoopChartsTableViewController, Identifiable
         switch Section(rawValue: indexPath.section)! {
         case .charts:
             return 275
-        case .inputs:
+        case .inputs, .dynamicISF:
             return 60
         }
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        guard Section(rawValue: indexPath.section) == .inputs else { return }
+        switch Section(rawValue: indexPath.section)! {
+        case .charts:
+            return
+        case .dynamicISF:
+            dynamicISFSelection = !isDynamicISFSelected
+            if let cell = tableView.cellForRow(at: indexPath) {
+                cell.accessoryType = isDynamicISFSelected ? .checkmark : .none
+            }
+        case .inputs:
+            let input = availableInputs[indexPath.row]
+            let isSelected = selectedInputs.contains(input)
 
-        let input = availableInputs[indexPath.row]
-        let isSelected = selectedInputs.contains(input)
+            if let cell = tableView.cellForRow(at: indexPath) {
+                cell.accessoryType = !isSelected ? .checkmark : .none
+            }
 
-        if let cell = tableView.cellForRow(at: indexPath) {
-            cell.accessoryType = !isSelected ? .checkmark : .none
+            selectedInputs.formSymmetricDifference(input)
         }
-
-        selectedInputs.formSymmetricDifference(input)
 
         tableView.deselectRow(at: indexPath, animated: true)
 

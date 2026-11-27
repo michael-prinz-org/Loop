@@ -174,6 +174,7 @@ struct DynamicISFInsulinHistory {
         let units: Double
     }
 
+    /// All doses incl. suspends, whose missing basal counts in the insulin effects like in DoseStore.
     let doses: [DoseEntry]
     let dataStart: Date
     /// Sorted by end date, with running totals, so every total costs O(log n) instead of O(n).
@@ -183,11 +184,11 @@ struct DynamicISFInsulinHistory {
 
     /// `doses` as returned for a query from `fetchStart`.
     init(doses: [DoseEntry], fetchStart: Date) {
-        let insulinDoses = doses.filter { $0.type != .suspend && $0.type != .resume }
-        let deliveries = insulinDoses
+        let deliveries = doses
+            .filter { $0.type != .suspend && $0.type != .resume }
             .map { Delivery(start: $0.startDate, end: max($0.startDate, $0.endDate), units: $0.unitsInDeliverableIncrements) }
             .sorted { $0.end < $1.end }
-        self.doses = insulinDoses
+        self.doses = doses
         self.dataStart = max(fetchStart, doses.map { $0.startDate }.min() ?? .distantFuture)
         self.deliveries = deliveries
         self.unitsEndedBefore = deliveries.reduce(into: [0]) { sums, delivery in
@@ -408,6 +409,15 @@ struct DynamicISFStatus: Equatable {
     var glucose: Double?
     var totalDailyDose: DynamicISFTotalDailyDose?
     var value: DynamicISFValue?
+}
+
+/// The prediction as if Dynamic ISF were switched on or off, for the Predicted Glucose screen.
+struct DynamicISFPreview {
+    var prediction: [PredictedGlucoseValue]
+    /// For a dose now; nil without Dynamic ISF.
+    var value: DynamicISFValue?
+    /// Why Dynamic ISF would leave the profile's insulin sensitivity for a dose now; nil when switched off.
+    var inactiveReason: DynamicISFInactiveReason?
 }
 
 final class DynamicISFState: ObservableObject {

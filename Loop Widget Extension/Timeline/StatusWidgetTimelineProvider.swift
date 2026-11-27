@@ -37,7 +37,11 @@ class StatusWidgetTimelineProvider: TimelineProvider {
     func placeholder(in context: Context) -> StatusWidgetTimelimeEntry {
         log.default("%{public}@: context=%{public}@", #function, String(describing: context))
 
-        return StatusWidgetTimelimeEntry(date: Date(), contextUpdatedAt: Date(), lastLoopCompleted: nil, closeLoop: true, currentGlucose: nil, glucoseFetchedAt: Date(), delta: nil, unit: .milligramsPerDeciliter, sensor: nil, pumpHighlight: nil, netBasal: nil, eventualGlucose: nil, preMealPresetAllowed: true, preMealPresetActive: false, customPresetActive: false)
+        return Self.emptyEntry()
+    }
+
+    private static func emptyEntry() -> StatusWidgetTimelimeEntry {
+        StatusWidgetTimelimeEntry(date: Date(), contextUpdatedAt: Date(), lastLoopCompleted: nil, closeLoop: true, currentGlucose: nil, glucoseFetchedAt: Date(), delta: nil, unit: .milligramsPerDeciliter, sensor: nil, pumpHighlight: nil, netBasal: nil, eventualGlucose: nil, preMealPresetAllowed: true, preMealPresetActive: false, customPresetActive: false)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (StatusWidgetTimelimeEntry) -> ()) {
@@ -112,11 +116,14 @@ class StatusWidgetTimelineProvider: TimelineProvider {
         let finalGlucose = glucose
 
         Task { @MainActor in
+            // WidgetKit waits for the completion, so it must be called on every path.
             guard let defaults = self.defaults,
                   let context = defaults.statusExtensionContext,
                   let contextUpdatedAt = context.createdAt,
-                  let unit = await healthStore.cachedPreferredUnits(for: .bloodGlucose)
+                  let unit = await healthStore.cachedPreferredUnits(for: .bloodGlucose) ?? context.predictedGlucose?.unit
             else {
+                self.log.error("Status context or glucose unit unavailable")
+                completion(Self.emptyEntry())
                 return
             }
 

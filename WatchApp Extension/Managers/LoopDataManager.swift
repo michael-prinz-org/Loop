@@ -154,6 +154,12 @@ extension LoopDataManager {
                 self.glucoseStore.setSyncGlucoseSamples(context.samples) { (error) in
                     if let error = error {
                         self.log.error("Failure setting sync glucose samples: %{public}@", String(describing: error))
+                    } else if !context.samples.isEmpty {
+                        // The complication chart reads these samples; redraw it instead of waiting for the next context.
+                        DispatchQueue.main.async {
+                            self.needsDidUpdateContextNotification = true
+                            self.sendDidUpdateContextNotificationIfNecessary()
+                        }
                     }
                 }
             case .failure:

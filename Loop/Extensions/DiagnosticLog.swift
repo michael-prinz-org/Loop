@@ -6,6 +6,7 @@
 //  Copyright © 2019 LoopKit Authors. All rights reserved.
 //
 
+import os
 import os.log
 import Foundation
 import Combine
@@ -252,5 +253,114 @@ final class InAppLogStore: ObservableObject {
         oldestIndex = 0
         lock.unlock()
         objectWillChange.send()
+    }
+}
+
+// MARK: - Resource usage
+
+/// Memory and CPU figures of the app process (not of its extensions).
+struct ResourceUsage {
+    /// The memory iOS charges the app with; jetsam terminates the app when it exceeds its limit.
+    let memoryFootprint: UInt64?
+    let peakMemoryFootprint: UInt64?
+    /// Remaining memory before the app hits its limit; nil where no limit applies (simulator).
+    let availableMemory: UInt64?
+    let cpuTime: TimeInterval
+    let processUptime: TimeInterval?
+
+    struct Storage: Sendable {
+        let app: Int64
+        /// The app group container, shared with the widget and other extensions.
+        let shared: Int64?
+    }
+
+    private static let log = DiagnosticLog(category: "ResourceUsage")
+
+    private static let processStartDate: Date? = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0 else { return nil }
+        return Date(timeIntervalSince1970: seconds(info.kp_proc.p_un.__p_starttime))
+    }()
+
+    static func current(now: Date = Date()) -> ResourceUsage {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        let vmInfo: task_vm_info_data_t? = result == KERN_SUCCESS ? info : nil
+
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        let available = UInt64(os_proc_available_memory())
+
+        return ResourceUsage(
+            memoryFootprint: vmInfo?.phys_footprint,
+            peakMemoryFootprint: vmInfo.flatMap { $0.ledger_phys_footprint_peak > 0 ? UInt64($0.ledger_phys_footprint_peak) : nil },
+            availableMemory: available > 0 ? available : nil,
+            cpuTime: seconds(usage.ru_utime) + seconds(usage.ru_stime),
+            processUptime: processStartDate.map { now.timeIntervalSince($0) }
+        )
+    }
+
+    /// Walks both containers, so call it off the main thread.
+    static func storage() -> Storage {
+        let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Bundle.main.appGroupSuiteName)
+        return Storage(app: directorySize(URL(fileURLWithPath: NSHomeDirectory())), shared: shared.map(directorySize))
+    }
+
+    static func logCurrent() {
+        let usage = current()
+        log.default("%{public}@; %{public}@", usage.memoryDescription, usage.cpuDescription)
+    }
+
+    var memoryDescription: String {
+        var parts = ["RAM " + (memoryFootprint.map { Self.bytes(Int64($0), style: .memory) } ?? "–")]
+        if let peakMemoryFootprint {
+            parts.append("peak " + Self.bytes(Int64(peakMemoryFootprint), style: .memory))
+        }
+        if let availableMemory {
+            parts.append(Self.bytes(Int64(availableMemory), style: .memory) + " available")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var cpuDescription: String {
+        var text = String(format: "CPU %.0f s", cpuTime)
+        if let processUptime, processUptime > 0 {
+            text += String(format: " (%.2f %% of %.1f h since launch)", cpuTime / processUptime * 100, processUptime / 3600)
+        }
+        return text
+    }
+
+    static func storageDescription(_ storage: Storage) -> String {
+        var parts = ["Storage " + bytes(storage.app, style: .file)]
+        if let shared = storage.shared {
+            parts.append("shared " + bytes(shared, style: .file))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func bytes(_ count: Int64, style: ByteCountFormatter.CountStyle) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: style)
+    }
+
+    private static func seconds(_ time: timeval) -> TimeInterval {
+        TimeInterval(time.tv_sec) + TimeInterval(time.tv_usec) / 1_000_000
+    }
+
+    private static func directorySize(_ url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .totalFileAllocatedSizeKey]
+        guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys)) else { return 0 }
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+            total += Int64(values.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 }

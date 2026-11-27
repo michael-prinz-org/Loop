@@ -305,7 +305,8 @@ final class DynamicISFTests: XCTestCase {
             basal(from: t0 + hour, to: t0 + day, rate: 1)
         ], fetchStart: t0)
 
-        XCTAssertEqual(history.doses.count, 1)
+        // The suspend stays for the insulin effects (missing basal), only the delivered total ignores it.
+        XCTAssertEqual(history.doses.count, 3)
         XCTAssertEqual(history.delivered(from: t0, to: t0 + day) ?? 0, 23, accuracy: accuracy)
     }
 
@@ -562,6 +563,17 @@ final class DynamicISFTests: XCTestCase {
 
         // Fully absorbed: 1 U × 51.20 (BG 110) + 1 U × 50 / 1.2 (BG 300, maximum ratio)
         XCTAssertEqual(effects.last?.quantity.doubleValue(for: .milligramsPerDeciliter) ?? 0, -(51.2009564977596 + 50 / 1.2), accuracy: 1e-6)
+    }
+
+    func testContextInsulinEffectsIncludeSuspendedBasal() {
+        let suspend = DoseEntry(type: .suspend, startDate: t0, endDate: t0 + hour, value: 0, unit: .unitsPerHour, scheduledBasalRate: HKQuantity(unit: DoseEntry.unitsPerHour, doubleValue: 1))
+        let context = makeContext(glucose: [(t0 - 5 * 60, 110)], doses: [suspend], referenceDate: t0 + 2 * hour)
+        let model = ExponentialInsulinModelPreset.rapidActingAdult
+
+        let effects = context.insulinEffects(start: t0, basalDosingEnd: nil, insulinModelProvider: StaticInsulinModelProvider(model), longestEffectDuration: model.effectDuration)
+
+        // 1 U of scheduled basal missing, like DoseStore's insulin effects: glucose rises by 1 U × 51.20 (BG 110).
+        XCTAssertEqual(effects.last?.quantity.doubleValue(for: .milligramsPerDeciliter) ?? 0, 51.2009564977596, accuracy: 1e-6)
     }
 
     func testDosingScheduleIsConstantInProfileUnit() {

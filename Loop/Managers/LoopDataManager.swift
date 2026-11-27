@@ -194,7 +194,6 @@ final class LoopDataManager {
             ) { (note) -> Void in
                 self.dataAccessQueue.async {
                     self.logger.default("Received notification of carb entries changing")
-                    self.liveActivityManager?.update(loopSettings: self.settings)
 
                     self.carbEffect = nil
                     self.carbsOnBoard = nil
@@ -210,8 +209,7 @@ final class LoopDataManager {
             ) { (note) in
                 self.dataAccessQueue.async {
                     self.logger.default("Received notification of glucose samples changing")
-                    self.liveActivityManager?.update(loopSettings: self.settings)
-                    
+
                     self.glucoseMomentumEffect = nil
                     self.remoteRecommendationNeedsUpdating = true
 
@@ -225,7 +223,6 @@ final class LoopDataManager {
             ) { (note) in
                 self.dataAccessQueue.async {
                     self.logger.default("Received notification of dosing changing")
-                    self.liveActivityManager?.update(loopSettings: self.settings)
 
                     self.clearCachedInsulinEffects()
                     self.remoteRecommendationNeedsUpdating = true
@@ -537,6 +534,14 @@ final class LoopDataManager {
 
         NotificationCenter.default.post(name: .LoopCompleted, object: self)
         TherapyOptimizer.shared.loopDidComplete(overrides: overrideHistory.getEvents())
+        ResourceUsage.logCurrent()
+    }
+
+    /// Called by ExtensionDataManager after the data shown in the widgets has changed.
+    func extensionContextDidChange() {
+        widgetLog.default("Refreshing widget and Live Activity. Reason: displayed data changed")
+        WidgetCenter.shared.reloadAllTimelines()
+        liveActivityManager?.update(loopSettings: settings)
     }
 
     private func loopDidError(date: Date, error: LoopError, dosingDecision: StoredDosingDecision, duration: TimeInterval) {
@@ -1030,12 +1035,6 @@ extension LoopDataManager {
             }
         }
 
-        // 5 second delay to allow stores to cache data before it is read by widget
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            self.widgetLog.default("Refreshing widget. Reason: Loop completed")
-            WidgetCenter.shared.reloadAllTimelines()
-        }
-
         updateRemoteRecommendation()
     }
 
@@ -1089,7 +1088,7 @@ extension LoopDataManager {
               let scheduledSensitivity = settings.insulinSensitivitySchedule,
               let correctionRange = settings.effectiveGlucoseTargetRangeSchedule() else {
             if lastActiveDynamicISFConfiguration != nil {
-                resetEffectsForDynamicISF(configurationChanged: true)
+                resetEffectsForDynamicISF(historyChanged: true)
             }
             lastActiveDynamicISFConfiguration = nil
             dynamicISFInputs = nil
@@ -1112,6 +1111,23 @@ extension LoopDataManager {
             return
         }
 
+        let context = makeDynamicISFContext(at: date, settings: dynamicSettings, divisor: divisor, sensitivity: sensitivity, scheduledSensitivity: scheduledSensitivity, correctionRange: correctionRange, dailyTotals: inputs.dailyTotals)
+
+        if inputs != dynamicISFInputs {
+            // A new glucose value only adds ISF for new doses; the other inputs change the ISF of past doses too.
+            let historyChanged = configuration != lastActiveDynamicISFConfiguration
+                || inputs.correctionRange != dynamicISFInputs?.correctionRange
+                || inputs.dailyTotals != dynamicISFInputs?.dailyTotals
+            resetEffectsForDynamicISF(historyChanged: historyChanged)
+        }
+        lastActiveDynamicISFConfiguration = configuration
+        dynamicISFInputs = inputs
+        setDynamicISFContext(context)
+        publishDynamicISFStatus(at: date, inactiveReason: context == nil ? .missingTotalDailyDose : nil, logging: logging)
+    }
+
+    /// Fetches the doses and glucose for a Dynamic ISF context; nil when the doses can't be fetched.
+    private func makeDynamicISFContext(at date: Date, settings dynamicSettings: DynamicISFSettings, divisor: Double, sensitivity: InsulinSensitivitySchedule, scheduledSensitivity: InsulinSensitivitySchedule, correctionRange: GlucoseRangeSchedule, dailyTotals: [DynamicISFDailyTotal]) -> DynamicISFContext? {
         let doseStart = date.addingTimeInterval(-DynamicISFContext.doseHistoryDuration)
         var doses: [DoseEntry]?
         var glucose: [(date: Date, value: Double)] = []
@@ -1140,25 +1156,16 @@ extension LoopDataManager {
         }
         _ = group.wait(timeout: .distantFuture)
 
-        if inputs != dynamicISFInputs {
-            resetEffectsForDynamicISF(configurationChanged: configuration != lastActiveDynamicISFConfiguration)
-        }
-        lastActiveDynamicISFConfiguration = configuration
-        dynamicISFInputs = inputs
-
         guard let fetchedDoses = doses else {
-            setDynamicISFContext(nil)
-            publishDynamicISFStatus(at: date, inactiveReason: .missingTotalDailyDose, logging: logging)
-            return
+            return nil
         }
 
         let history = DynamicISFInsulinHistory(doses: fetchedDoses, fetchStart: doseStart)
-        let dailyTotals = inputs.dailyTotals
         let unitsPerPumpUnit = InsulinConcentrationHistory.current.unitsPerPumpUnit
         let totalDailyDose: (Date) -> DynamicISFTotalDailyDose? = dynamicISFTotalDailyDose ?? { date in
             DynamicISFDailyTotalsStore.totalDailyDose(at: date, history: history, dailyTotals: dailyTotals, unitsPerPumpUnit: unitsPerPumpUnit, weight: dynamicSettings.tddWeight, calendar: .current)
         }
-        setDynamicISFContext(DynamicISFContext(
+        return DynamicISFContext(
             referenceDate: date,
             settings: dynamicSettings,
             divisor: divisor,
@@ -1168,8 +1175,7 @@ extension LoopDataManager {
             scheduledSensitivitySchedule: scheduledSensitivity,
             correctionRange: correctionRange,
             totalDailyDose: totalDailyDose
-        ))
-        publishDynamicISFStatus(at: date, inactiveReason: nil, logging: logging)
+        )
     }
 
     private func setDynamicISFContext(_ context: DynamicISFContext?) {
@@ -1181,9 +1187,9 @@ extension LoopDataManager {
         }
     }
 
-    /// The insulin counteraction effects are appended incrementally, so a new insulin sensitivity source needs them from scratch.
-    private func resetEffectsForDynamicISF(configurationChanged: Bool) {
-        if configurationChanged {
+    /// The insulin counteraction effects are appended incrementally, so a changed ISF of past doses needs them from scratch.
+    private func resetEffectsForDynamicISF(historyChanged: Bool) {
+        if historyChanged {
             insulinCounteractionEffects = []
         }
         clearCachedInsulinEffects()
@@ -1253,9 +1259,9 @@ extension LoopDataManager {
         return (dosing.schedule, dosing.value)
     }
 
-    /// Like `DoseStore.getGlucoseEffects`, with each dose's Dynamic ISF while it is active.
-    private func getInsulinEffects(start: Date, basalDosingEnd: Date?, completion: @escaping (DoseStoreResult<[GlucoseEffect]>) -> Void) {
-        guard let context = dynamicISFContext else {
+    /// Like `DoseStore.getGlucoseEffects`, with each dose's Dynamic ISF from `context`.
+    private func getInsulinEffects(start: Date, basalDosingEnd: Date?, context: DynamicISFContext?, completion: @escaping (DoseStoreResult<[GlucoseEffect]>) -> Void) {
+        guard let context else {
             doseStore.getGlucoseEffects(start: start, end: nil, basalDosingEnd: basalDosingEnd, completion: completion)
             return
         }
@@ -1337,7 +1343,7 @@ extension LoopDataManager {
         if insulinEffect == nil || insulinEffect?.first?.startDate ?? .distantFuture > insulinEffectStartDate {
             self.logger.debug("Recomputing insulin effects")
             updateGroup.enter()
-            getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: now()) { (result) -> Void in
+            getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: now(), context: dynamicISFContext) { (result) -> Void in
                 switch result {
                 case .failure(let error):
                     self.logger.error("Could not fetch insulin effects: %{public}@", error.localizedDescription)
@@ -1353,7 +1359,7 @@ extension LoopDataManager {
 
         if insulinEffectIncludingPendingInsulin == nil {
             updateGroup.enter()
-            getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: nil) { (result) -> Void in
+            getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: nil, context: dynamicISFContext) { (result) -> Void in
                 switch result {
                 case .failure(let error):
                     self.logger.error("Could not fetch insulin effects including pending insulin: %{public}@", error.localizedDescription)
@@ -1535,6 +1541,7 @@ extension LoopDataManager {
         historicalInsulinEffect insulinEffectOverride: [GlucoseEffect]? = nil,
         insulinCounteractionEffects insulinCounteractionEffectsOverride: [GlucoseEffectVelocity]? = nil,
         historicalCarbEffect carbEffectOverride: [GlucoseEffect]? = nil,
+        retrospectiveGlucoseEffect retrospectiveGlucoseEffectOverride: [GlucoseEffect]? = nil,
         potentialBolus: DoseEntry? = nil,
         potentialCarbEntry: NewCarbEntry? = nil,
         replacingCarbEntry replacedCarbEntry: StoredCarbEntry? = nil,
@@ -1564,7 +1571,7 @@ extension LoopDataManager {
         }
 
         var momentum: [GlucoseEffect] = []
-        var retrospectiveGlucoseEffect = self.retrospectiveGlucoseEffect
+        var retrospectiveGlucoseEffect = retrospectiveGlucoseEffectOverride ?? self.retrospectiveGlucoseEffect
         var effects: [[GlucoseEffect]] = []
 
         let insulinCounteractionEffects = insulinCounteractionEffectsOverride ?? self.insulinCounteractionEffects
@@ -1672,6 +1679,142 @@ extension LoopDataManager {
         return prediction
     }
 
+    /// Whether the last update used Dynamic ISF; call from a `getLoopState` handler.
+    var isDynamicISFActive: Bool {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+        return dynamicISFContext != nil
+    }
+
+    /// Display only, call from a `getLoopState` handler: the prediction as if Dynamic ISF were switched on or off. Insulin counteraction,
+    /// carb absorption and standard retrospective correction are recalculated with it (switching Dynamic ISF on turns IRC off).
+    func predictGlucose(dynamicISFEnabled: Bool, using inputs: PredictionInputEffect, includingPendingInsulin: Bool) throws -> DynamicISFPreview {
+        dispatchPrecondition(condition: .onQueue(dataAccessQueue))
+
+        let date = now()
+        guard dynamicISFEnabled != (dynamicISFContext != nil) else {
+            let prediction = try predictGlucose(using: inputs, includingPendingInsulin: includingPendingInsulin)
+            return DynamicISFPreview(prediction: prediction, value: dynamicISFContext?.value(at: date), inactiveReason: currentValueInactiveReason(dynamicISFContext, at: date))
+        }
+
+        guard let glucose = glucoseStore.latestGlucose else {
+            throw LoopError.missingDataError(.glucose)
+        }
+        guard let scheduledSensitivity = settings.insulinSensitivitySchedule else {
+            throw LoopError.configurationError(.insulinSensitivitySchedule)
+        }
+        guard let basalRateSchedule = settings.basalRateSchedule else {
+            throw LoopError.configurationError(.basalRateSchedule)
+        }
+        guard let targetRangeSchedule = settings.glucoseTargetRangeSchedule else {
+            throw LoopError.configurationError(.glucoseTargetRangeSchedule)
+        }
+
+        let (context, contextInactiveReason): (DynamicISFContext?, DynamicISFInactiveReason?) = dynamicISFEnabled ? previewDynamicISFContext(at: date) : (nil, nil)
+
+        let group = DispatchGroup()
+        let fetchInsulinEffects = { (start: Date, basalDosingEnd: Date?) throws -> [GlucoseEffect] in
+            var result: DoseStoreResult<[GlucoseEffect]>?
+            group.enter()
+            self.getInsulinEffects(start: start, basalDosingEnd: basalDosingEnd, context: context) {
+                result = $0
+                group.leave()
+            }
+            group.wait()
+            switch result {
+            case .success(let effects)?:
+                return effects
+            case .failure(let error)?:
+                throw error
+            case nil:
+                return []
+            }
+        }
+
+        // The full 24 hours, like after switching Dynamic ISF in the settings.
+        let earliestEffectDate = date.addingTimeInterval(.hours(-24))
+        let counteractionInsulinEffect = try fetchInsulinEffects(earliestEffectDate.addingTimeInterval(.minutes(-5)), date)
+        var counteractionEffects: [GlucoseEffectVelocity] = []
+        var counteractionError: Error?
+        group.enter()
+        glucoseStore.getCounteractionEffects(start: earliestEffectDate, end: nil, to: counteractionInsulinEffect) { result in
+            switch result {
+            case .failure(let error):
+                counteractionError = error
+            case .success(let velocities):
+                counteractionEffects = velocities.filterDateRange(earliestEffectDate, nil)
+            }
+            group.leave()
+        }
+        group.wait()
+        if let counteractionError {
+            throw counteractionError
+        }
+
+        let predictionInsulinEffect = try includingPendingInsulin
+            ? fetchInsulinEffects((counteractionEffects.last?.endDate ?? earliestEffectDate).addingTimeInterval(.minutes(-5)), nil)
+            : counteractionInsulinEffect
+
+        let carbEntrySensitivity: ((Date) -> HKQuantity?)? = context.map { previewContext in { previewContext.carbEntrySensitivity(at: $0) } }
+        let carbEffect = try carbStore.glucoseEffects(
+            of: recentCarbEntries ?? [],
+            startingAt: glucose.startDate.addingTimeInterval(-StandardRetrospectiveCorrection.retrospectionInterval),
+            endingAt: nil,
+            effectVelocities: counteractionEffects,
+            usingScheduledInsulinSensitivity: context == nil,
+            insulinSensitivityAtEntryStart: carbEntrySensitivity
+        )
+
+        let discrepancies = counteractionEffects.subtracting(carbEffect, withUniformInterval: carbStore.delta)
+        let retrospectiveEffect = StandardRetrospectiveCorrection(effectDuration: LoopMath.retrospectiveCorrectionEffectDuration).computeEffect(
+            startingAt: glucose,
+            retrospectiveGlucoseDiscrepanciesSummed: discrepancies.combinedSums(of: LoopMath.retrospectiveCorrectionGroupingInterval * retrospectiveCorrectionGroupingIntervalMultiplier),
+            recencyInterval: LoopCoreConstants.inputDataRecencyInterval,
+            insulinSensitivity: scheduledSensitivity.quantity(at: glucose.startDate),
+            basalRate: basalRateSchedule.value(at: glucose.startDate),
+            correctionRange: targetRangeSchedule.quantityRange(at: glucose.startDate),
+            retrospectiveCorrectionGroupingInterval: LoopMath.retrospectiveCorrectionGroupingInterval
+        )
+
+        let prediction = try predictGlucose(
+            using: inputs,
+            historicalInsulinEffect: predictionInsulinEffect,
+            insulinCounteractionEffects: counteractionEffects,
+            historicalCarbEffect: carbEffect,
+            retrospectiveGlucoseEffect: retrospectiveEffect,
+            includingPendingInsulin: includingPendingInsulin
+        )
+        return DynamicISFPreview(prediction: prediction, value: context?.value(at: date), inactiveReason: contextInactiveReason ?? currentValueInactiveReason(context, at: date))
+    }
+
+    /// A context with the user's Dynamic ISF settings as if switched on (and IRC off), or why there is none.
+    private func previewDynamicISFContext(at date: Date) -> (DynamicISFContext?, DynamicISFInactiveReason?) {
+        var dynamicSettings = dynamicISFSettings()
+        dynamicSettings.isEnabled = true
+        let configuration = DynamicISFConfiguration(settings: dynamicSettings, integralRetrospectiveCorrectionEnabled: false, insulinType: pumpInsulinType)
+        if let reason = configuration.inactiveReason {
+            return (nil, reason)
+        }
+        guard let divisor = DynamicISFCalculator.insulinDivisor(for: configuration.insulinType),
+              let sensitivity = insulinSensitivityScheduleApplyingOverrideHistory,
+              let scheduledSensitivity = settings.insulinSensitivitySchedule,
+              let correctionRange = settings.effectiveGlucoseTargetRangeSchedule() else {
+            return (nil, .missingTherapySettings)
+        }
+        updateDynamicISFDailyTotalsIfNeeded(at: date)
+        guard let context = makeDynamicISFContext(at: date, settings: dynamicSettings, divisor: divisor, sensitivity: sensitivity, scheduledSensitivity: scheduledSensitivity, correctionRange: correctionRange, dailyTotals: dynamicISFDailyTotals.totals) else {
+            return (nil, .missingTotalDailyDose)
+        }
+        return (context, nil)
+    }
+
+    /// Why `context` leaves the profile's insulin sensitivity for a dose at `date`; nil without a context.
+    private func currentValueInactiveReason(_ context: DynamicISFContext?, at date: Date) -> DynamicISFInactiveReason? {
+        guard let context, context.value(at: date) == nil else {
+            return nil
+        }
+        return context.latestGlucose(at: date) == nil ? .missingGlucose : .missingTotalDailyDose
+    }
+
     fileprivate func predictGlucoseFromManualGlucose(
         _ glucose: NewGlucoseSample,
         potentialBolus: DoseEntry?,
@@ -1691,7 +1834,7 @@ extension LoopDataManager {
         var insulinEffect: [GlucoseEffect]?
         let basalDosingEnd = includingPendingInsulin ? nil : now()
         updateGroup.enter()
-        getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: basalDosingEnd) { result in
+        getInsulinEffects(start: insulinEffectStartDate, basalDosingEnd: basalDosingEnd, context: dynamicISFContext) { result in
             switch result {
             case .failure(let error):
                 effectCalculationError.mutate { $0 = error }

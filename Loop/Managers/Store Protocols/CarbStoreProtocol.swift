@@ -47,6 +47,8 @@ protocol CarbStoreProtocol: AnyObject {
     func getGlucoseEffects(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity], completion: @escaping(_ result: CarbStoreResult<(entries: [StoredCarbEntry], effects: [GlucoseEffect])>) -> Void)
     
     func glucoseEffects<Sample: CarbEntry>(of samples: [Sample], startingAt start: Date, endingAt end: Date?, effectVelocities: [GlucoseEffectVelocity]) throws -> [GlucoseEffect]
+
+    func glucoseEffects<Sample: CarbEntry>(of samples: [Sample], startingAt start: Date, endingAt end: Date?, effectVelocities: [GlucoseEffectVelocity], usingScheduledInsulinSensitivity: Bool, insulinSensitivityAtEntryStart: ((Date) -> HKQuantity?)?) throws -> [GlucoseEffect]
     
     func getCarbsOnBoardValues(start: Date, end: Date?, effectVelocities: [GlucoseEffectVelocity]?, completion: @escaping (_ result: CarbStoreResult<[CarbValue]>) -> Void)
 
@@ -57,6 +59,13 @@ protocol CarbStoreProtocol: AnyObject {
     func getTotalCarbs(since start: Date, completion: @escaping (_ result: CarbStoreResult<CarbValue>) -> Void)
     
     func deleteCarbEntry(_ entry: StoredCarbEntry, completion: @escaping (_ result: CarbStoreResult<Bool>) -> Void)
+}
+
+extension CarbStoreProtocol {
+    /// For stores without per-call insulin sensitivity (test mocks); CarbStore implements it.
+    func glucoseEffects<Sample: CarbEntry>(of samples: [Sample], startingAt start: Date, endingAt end: Date?, effectVelocities: [GlucoseEffectVelocity], usingScheduledInsulinSensitivity: Bool, insulinSensitivityAtEntryStart: ((Date) -> HKQuantity?)?) throws -> [GlucoseEffect] {
+        try glucoseEffects(of: samples, startingAt: start, endingAt: end, effectVelocities: effectVelocities)
+    }
 }
 
 extension CarbStore: CarbStoreProtocol { }

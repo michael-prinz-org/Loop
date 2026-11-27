@@ -107,10 +107,36 @@ final class WatchDataManager: NSObject {
         }
 
         // Any update context should trigger a watch update
-        sendWatchContextIfNeeded()
+        scheduleWatchContextUpdate()
 
         if case .preferences = updateContext {
             sendSettingsIfNeeded()
+        }
+    }
+
+    /// One loop cycle posts several updates; sending once they settle gives the budgeted complication push the loop result.
+    private static let contextQuietPeriod: TimeInterval = 5
+    private static let contextMaximumDelay: TimeInterval = 60
+
+    // Main queue only
+    private var pendingContextSince: Date?
+    private var contextWorkItem: DispatchWorkItem?
+
+    private func scheduleWatchContextUpdate() {
+        DispatchQueue.main.async {
+            let now = Date()
+            let since = self.pendingContextSince ?? now
+            self.pendingContextSince = since
+
+            self.contextWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.pendingContextSince = nil
+                self?.contextWorkItem = nil
+                self?.sendWatchContextIfNeeded()
+            }
+            self.contextWorkItem = workItem
+            let remaining = since.addingTimeInterval(Self.contextMaximumDelay).timeIntervalSince(now)
+            DispatchQueue.main.asyncAfter(deadline: .now() + min(Self.contextQuietPeriod, max(0, remaining)), execute: workItem)
         }
     }
 
@@ -118,6 +144,9 @@ final class WatchDataManager: NSObject {
 
     private let minTrendDrift: Double = 20
     private lazy var minTrendUnit = HKUnit.milligramsPerDeciliter
+    /// A bolus or carb entry this large is pushed to the complication without waiting for the interval.
+    private let minInsulinOnBoardIncrease: Double = 1
+    private let minCarbsOnBoardIncrease: Double = 10
 
     private func sendSettingsIfNeeded() {
         let settings = deviceManager.loopManager.settings
@@ -211,8 +240,12 @@ final class WatchDataManager: NSObject {
         {
             let enoughTimePassed = newGlucoseDate.timeIntervalSince(lastGlucoseDate) >= session.complicationUserInfoTransferInterval(bedtime: bedtime)
             let enoughTrendDrift = abs(newGlucose.doubleValue(for: minTrendUnit) - lastGlucose.doubleValue(for: minTrendUnit)) >= minTrendDrift
+            let dosingChanged = (context.iob ?? 0) - (lastContext.iob ?? 0) >= minInsulinOnBoardIncrease
+                || (context.cob ?? 0) - (lastContext.cob ?? 0) >= minCarbsOnBoardIncrease
 
-            complicationShouldUpdate = enoughTimePassed || enoughTrendDrift || lastContext.insulinEffectLevel != context.insulinEffectLevel
+            complicationShouldUpdate = enoughTimePassed || enoughTrendDrift || dosingChanged
+                || lastContext.isClosedLoop != context.isClosedLoop
+                || lastContext.insulinEffectLevel != context.insulinEffectLevel
         } else {
             complicationShouldUpdate = true
         }

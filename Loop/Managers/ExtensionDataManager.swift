@@ -59,11 +59,23 @@ final class ExtensionDataManager {
     @objc private func notificationReceived(_ notification: Notification) {
         update()
     }
-    
+
+    /// One loop cycle posts several updates (glucose, doses, loop finished); publish once they settle.
+    private static let publishQuietPeriod: TimeInterval = 5
+    private static let publishMaximumDelay: TimeInterval = 60
+
+    // Main queue only
+    private var pendingContext: (context: StatusExtensionContext, displayedValues: NSDictionary)?
+    private var pendingSince: Date?
+    private var publishWorkItem: DispatchWorkItem?
+    private var publishedDisplayedValues: NSDictionary?
+
     private func update() {
-        createStatusContext(glucoseUnit:  deviceManager.preferredGlucoseUnit) { (context) in
+        createStatusContext(glucoseUnit:  deviceManager.preferredGlucoseUnit) { (context, displayedValues) in
             if let context = context {
-                ExtensionDataManager.context = context
+                DispatchQueue.main.async {
+                    self.schedulePublish(context, displayedValues: displayedValues)
+                }
             }
         }
         
@@ -74,13 +86,41 @@ final class ExtensionDataManager {
         }
     }
     
+    private func schedulePublish(_ context: StatusExtensionContext, displayedValues: NSDictionary) {
+        let now = Date()
+        let since = pendingSince ?? now
+        pendingContext = (context, displayedValues)
+        pendingSince = since
+
+        publishWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.publishPendingContext()
+        }
+        publishWorkItem = workItem
+        let remaining = since.addingTimeInterval(Self.publishMaximumDelay).timeIntervalSince(now)
+        DispatchQueue.main.asyncAfter(deadline: .now() + min(Self.publishQuietPeriod, max(0, remaining)), execute: workItem)
+    }
+
+    /// Widgets and the Live Activity are refreshed only when something they display has changed.
+    private func publishPendingContext() {
+        guard let pending = pendingContext else { return }
+        pendingContext = nil
+        pendingSince = nil
+        publishWorkItem = nil
+
+        guard pending.displayedValues != publishedDisplayedValues else { return }
+        publishedDisplayedValues = pending.displayedValues
+        ExtensionDataManager.context = pending.context
+        deviceManager.loopManager.extensionContextDidChange()
+    }
+
     private func createIntentsContext(_ completion: @escaping (_ context: IntentExtensionInfo?) -> Void) {
         let presets = deviceManager.loopManager.settings.overridePresets
         let info = IntentExtensionInfo(overridePresetNames: presets.map { $0.name })
         completion(info)
     }
 
-    private func createStatusContext(glucoseUnit: HKUnit, _ completionHandler: @escaping (_ context: StatusExtensionContext?) -> Void) {
+    private func createStatusContext(glucoseUnit: HKUnit, _ completionHandler: @escaping (_ context: StatusExtensionContext?, _ displayedValues: NSDictionary) -> Void) {
 
         let basalDeliveryState = deviceManager.pumpManager?.status.basalDeliveryState
 
@@ -166,8 +206,14 @@ final class ExtensionDataManager {
             context.cgmLifecycleProgressContext = DeviceLifecycleProgressContext(from: dataManager.cgmLifecycleProgress)
 
             context.carbsOnBoard = state.carbsOnBoard?.quantity.doubleValue(for: .gram())
-            
-            completionHandler(context)
+
+            // The widgets read glucose and the Live Activity IOB from the stores, not from the context.
+            var displayedValues = context.rawValue
+            displayedValues["createdAt"] = nil
+            displayedValues["latestGlucose"] = dataManager.glucoseStore.latestGlucose.map { [$0.startDate, $0.quantity.doubleValue(for: .milligramsPerDeciliter)] as [Any] }
+            displayedValues["insulinOnBoard"] = state.insulinOnBoard.map { ($0.value * 10).rounded() / 10 }
+
+            completionHandler(context, NSDictionary(dictionary: displayedValues))
         }
     }
 }

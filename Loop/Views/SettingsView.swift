@@ -875,6 +875,8 @@ struct LogView: View {
         VStack(spacing: 0) {
             enableBar
             Divider()
+            ResourceUsageBar()
+            Divider()
             controlBar
             Divider()
             content
@@ -1083,6 +1085,35 @@ struct LogView: View {
         case .notice: return .primary
         case .error: return .orange
         case .fault: return .red
+        }
+    }
+}
+
+/// Separate view so its periodic refresh does not re-filter the log list.
+private struct ResourceUsageBar: View {
+    @State private var usage = ResourceUsage.current()
+    @State private var storage: ResourceUsage.Storage?
+
+    private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(usage.memoryDescription)
+            Text(usage.cpuDescription)
+            Text(storage.map(ResourceUsage.storageDescription) ?? "Storage …")
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundColor(.secondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .onReceive(refreshTimer) { _ in
+            usage = ResourceUsage.current()
+        }
+        .task {
+            storage = await Task.detached(priority: .utility) { ResourceUsage.storage() }.value
         }
     }
 }
